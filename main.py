@@ -875,7 +875,6 @@ def main() -> None:
     st.session_state.setdefault("last_status", "等待任務開始")
     st.session_state.setdefault("health_status", "")
     st.session_state.setdefault("health_message", "尚未執行健康檢查")
-    st.session_state.setdefault("show_server_dir_selector", False)
     is_cloud = is_streamlit_cloud_environment()
 
     with st.sidebar:
@@ -898,50 +897,31 @@ def main() -> None:
         if naming_rule == "自訂名稱":
             custom_name = st.text_input("自訂檔名", value="lesson_video")
 
-        output_col, choose_col = st.columns([4, 1])
-        with output_col:
-            output_dir_raw = st.text_input("下載資料夾", key="output_dir_raw")
-        with choose_col:
-            st.write("")
-            choose_dir = st.button(
-                "選擇",
-                use_container_width=True,
-                help="本機會開啟資料夾視窗；部署環境會切換到伺服器可寫入目錄。",
-            )
-
         if is_cloud:
-            st.caption("已偵測部署環境：無法開啟本機資料夾選擇器，請選擇伺服器可寫入目錄。")
-            if st.session_state.get("show_server_dir_selector", False):
-                server_presets = get_server_output_presets()
-                current_output = st.session_state.get("output_dir_raw", "")
-                default_index = 0
-                if current_output in server_presets:
-                    default_index = server_presets.index(current_output)
-
-                selected_server_dir = st.selectbox(
-                    "伺服器輸出目錄",
-                    options=server_presets,
-                    index=default_index,
-                    key="server_output_dir_select",
+            server_presets = get_server_output_presets()
+            _cur = st.session_state.get("output_dir_raw", server_presets[0] if server_presets else "")
+            _def_idx = server_presets.index(_cur) if _cur in server_presets else 0
+            selected_server_dir = st.selectbox(
+                "下載資料夾",
+                options=server_presets,
+                index=_def_idx,
+                key="server_output_dir_select",
+            )
+            st.session_state["output_dir_raw"] = selected_server_dir
+            output_dir_raw = selected_server_dir
+            choose_dir = False
+            st.caption("部署環境：已自動列出伺服器可寫入目錄，選取即生效。")
+        else:
+            output_col, choose_col = st.columns([4, 1])
+            with output_col:
+                output_dir_raw = st.text_input("下載資料夾", key="output_dir_raw")
+            with choose_col:
+                st.write("")
+                choose_dir = st.button(
+                    "選擇",
+                    use_container_width=True,
+                    help="開啟本機資料夾選擇視窗",
                 )
-                apply_col, cancel_col = st.columns(2)
-                with apply_col:
-                    apply_server_dir = st.button("套用", use_container_width=True, key="apply_server_dir_btn")
-                with cancel_col:
-                    cancel_server_dir = st.button("取消", use_container_width=True, key="cancel_server_dir_btn")
-
-                if apply_server_dir:
-                    st.session_state["output_dir_raw"] = selected_server_dir
-                    st.session_state["show_server_dir_selector"] = False
-                    append_task_log(f"已套用伺服器目錄: {selected_server_dir}")
-                    st.rerun()
-
-                if cancel_server_dir:
-                    st.session_state["show_server_dir_selector"] = False
-                    append_task_log("已取消伺服器目錄選擇")
-                    st.rerun()
-            else:
-                st.caption("按「選擇」即可開啟伺服器目錄下拉選單。")
 
         st.selectbox("輸出格式", options=["MP4"], index=0, disabled=True)
         retry_count = st.slider("重試次數", min_value=1, max_value=10, value=3)
@@ -964,10 +944,6 @@ def main() -> None:
         st.caption("推送到 main 分支可自動部署。")
 
     if choose_dir:
-        if is_cloud:
-            st.session_state["show_server_dir_selector"] = True
-            append_task_log("已開啟伺服器目錄選單")
-            st.rerun()
         chosen_dir, choose_error = select_output_directory(st.session_state.get("output_dir_raw", ""))
         if choose_error:
             st.warning(choose_error)
