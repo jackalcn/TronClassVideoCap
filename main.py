@@ -944,6 +944,83 @@ def health_panel_html(status: str, message: str) -> str:
     )
 
 
+def render_final_download_actions(output_file: Path, is_cloud: bool) -> None:
+    if not output_file.exists():
+        st.warning("找不到影片檔，請重試下載。")
+        return
+
+    zip_data, zip_name, subtitle_names = build_video_subtitle_zip(output_file)
+    bundled_files = collect_video_and_subtitle_files(output_file)
+    subtitle_files = [path for path in bundled_files if path != output_file]
+    key_base = re.sub(r"[^A-Za-z0-9_]+", "_", output_file.stem).strip("_") or "video"
+
+    st.markdown("完成後下載選項")
+
+    if zip_data:
+        st.download_button(
+            label="下載影片+字幕.zip",
+            data=zip_data,
+            file_name=zip_name,
+            mime="application/zip",
+            use_container_width=True,
+            key=f"download_zip_{key_base}",
+        )
+        if subtitle_names:
+            st.caption(f"壓縮檔已包含影片與 {len(subtitle_names)} 個字幕檔。")
+        else:
+            st.caption("未偵測到字幕檔，壓縮檔目前僅包含影片。")
+    else:
+        st.button(
+            "下載影片+字幕.zip",
+            use_container_width=True,
+            disabled=True,
+            key=f"download_zip_disabled_{key_base}",
+        )
+        st.caption("目前無法建立影片+字幕壓縮檔。")
+
+    show_separate_key = f"show_separate_downloads_{key_base}"
+    open_separate = st.button(
+        "下載影片+字幕(影片及字幕檔案分別下載)",
+        use_container_width=True,
+        key=f"show_separate_btn_{key_base}",
+    )
+    if open_separate:
+        st.session_state[show_separate_key] = not st.session_state.get(show_separate_key, False)
+
+    if st.session_state.get(show_separate_key, False):
+        st.download_button(
+            label=f"下載影片 ({output_file.name})",
+            data=output_file.read_bytes(),
+            file_name=output_file.name,
+            mime="video/mp4",
+            use_container_width=True,
+            key=f"download_video_separate_{key_base}",
+        )
+        if subtitle_files:
+            for idx, subtitle_path in enumerate(subtitle_files, start=1):
+                st.download_button(
+                    label=f"下載字幕 {idx}: {subtitle_path.name}",
+                    data=subtitle_path.read_bytes(),
+                    file_name=subtitle_path.name,
+                    mime="text/plain",
+                    use_container_width=True,
+                    key=f"download_subtitle_{key_base}_{idx}",
+                )
+        else:
+            st.info("未偵測到可下載字幕檔。")
+
+    st.download_button(
+        label="下載影片",
+        data=output_file.read_bytes(),
+        file_name=output_file.name,
+        mime="video/mp4",
+        use_container_width=True,
+        key=f"download_video_only_{key_base}",
+    )
+    if is_cloud:
+        st.caption("部署環境無法直接寫入你的電腦資料夾，請使用上方按鈕下載。")
+
+
 def main() -> None:
     st.set_page_config(
         page_title="TronClass 影片下載平台",
@@ -961,6 +1038,7 @@ def main() -> None:
     st.session_state.setdefault("last_status", "等待任務開始")
     st.session_state.setdefault("health_status", "")
     st.session_state.setdefault("health_message", "尚未執行健康檢查")
+    st.session_state.setdefault("last_output_file", "")
     is_cloud = is_streamlit_cloud_environment()
 
     with st.sidebar:
@@ -1029,6 +1107,10 @@ def main() -> None:
         st.session_state["last_status"] = "等待任務開始"
         st.session_state["health_status"] = ""
         st.session_state["health_message"] = "尚未執行健康檢查"
+        st.session_state["last_output_file"] = ""
+        for key in list(st.session_state.keys()):
+            if key.startswith("show_separate_downloads_"):
+                st.session_state.pop(key, None)
         st.success("任務歷程已清除。")
 
     st.markdown("<div class='hero-title'>TronClass 影片下載平台</div>", unsafe_allow_html=True)
@@ -1201,87 +1283,8 @@ def main() -> None:
 
                 st.success(f"下載完成：{output_file}")
                 append_task_log(f"下載完成: {output_file}")
-
-                zip_data, zip_name, subtitle_names = build_video_subtitle_zip(output_file)
-                bundled_files = collect_video_and_subtitle_files(output_file)
-                subtitle_files = [path for path in bundled_files if path != output_file]
-                key_base = re.sub(r"[^A-Za-z0-9_]+", "_", output_file.stem).strip("_") or "video"
-
-                st.markdown("完成後下載選項")
-
-                if zip_data:
-                    st.download_button(
-                        label="下載影片+字幕.zip",
-                        data=zip_data,
-                        file_name=zip_name,
-                        mime="application/zip",
-                        use_container_width=True,
-                        key=f"download_zip_{key_base}",
-                    )
-                    if subtitle_names:
-                        st.caption(f"壓縮檔已包含影片與 {len(subtitle_names)} 個字幕檔。")
-                    else:
-                        st.caption("未偵測到字幕檔，壓縮檔目前僅包含影片。")
-                else:
-                    st.button(
-                        "下載影片+字幕.zip",
-                        use_container_width=True,
-                        disabled=True,
-                        key=f"download_zip_disabled_{key_base}",
-                    )
-                    st.caption("目前無法建立影片+字幕壓縮檔。")
-
-                show_separate_key = f"show_separate_downloads_{key_base}"
-                open_separate = st.button(
-                    "下載影片+字幕(影片及字幕檔案分別下載)",
-                    use_container_width=True,
-                    key=f"show_separate_btn_{key_base}",
-                    disabled=not output_file.exists(),
-                )
-                if open_separate:
-                    st.session_state[show_separate_key] = not st.session_state.get(show_separate_key, False)
-
-                if st.session_state.get(show_separate_key, False):
-                    if output_file.exists():
-                        st.download_button(
-                            label=f"下載影片 ({output_file.name})",
-                            data=output_file.read_bytes(),
-                            file_name=output_file.name,
-                            mime="video/mp4",
-                            use_container_width=True,
-                            key=f"download_video_separate_{key_base}",
-                        )
-                    if subtitle_files:
-                        for idx, subtitle_path in enumerate(subtitle_files, start=1):
-                            st.download_button(
-                                label=f"下載字幕 {idx}: {subtitle_path.name}",
-                                data=subtitle_path.read_bytes(),
-                                file_name=subtitle_path.name,
-                                mime="text/plain",
-                                use_container_width=True,
-                                key=f"download_subtitle_{key_base}_{idx}",
-                            )
-                    else:
-                        st.info("未偵測到可下載字幕檔。")
-
-                if output_file.exists():
-                    st.download_button(
-                        label="下載影片",
-                        data=output_file.read_bytes(),
-                        file_name=output_file.name,
-                        mime="video/mp4",
-                        use_container_width=True,
-                        key=f"download_video_only_{key_base}",
-                    )
-                    if is_cloud:
-                        st.caption("部署環境無法直接寫入你的電腦資料夾，請使用上方按鈕下載。")
-                else:
-                    st.button(
-                        "下載影片",
-                        use_container_width=True,
-                        disabled=True,
-                        key=f"download_video_disabled_{key_base}",
-                    )
+                st.session_state["last_output_file"] = str(output_file)
+                render_final_download_actions(output_file, is_cloud)
 
                 if download_subtitles:
                     if has_requested_subs:
@@ -1315,6 +1318,16 @@ def main() -> None:
                     unsafe_allow_html=True,
                 )
             st.error(error_message)
+
+    if not (start_download or inspect_only):
+        saved_output_file = str(st.session_state.get("last_output_file", "")).strip()
+        if saved_output_file:
+            saved_path = Path(saved_output_file)
+            if saved_path.exists():
+                st.success(f"下載完成：{saved_path}")
+                render_final_download_actions(saved_path, is_cloud)
+            else:
+                st.session_state["last_output_file"] = ""
 
 
 if __name__ == "__main__":
