@@ -910,9 +910,19 @@ def main() -> None:
             custom_name = st.text_input("自訂檔名", value="lesson_video")
 
         if is_cloud:
+            server_presets = get_server_output_presets()
+            _cur = st.session_state.get("output_dir_raw", server_presets[0] if server_presets else "")
+            _def_idx = server_presets.index(_cur) if _cur in server_presets else 0
+            selected_server_dir = st.selectbox(
+                "伺服器暫存目錄",
+                options=server_presets,
+                index=_def_idx,
+                key="server_output_dir_select",
+            )
+
             output_col, choose_col = st.columns([4, 1])
             with output_col:
-                output_dir_raw = st.text_input("下載資料夾", key="output_dir_raw", disabled=True)
+                st.text_input("下載資料夾", value=selected_server_dir, disabled=True, key="cloud_output_dir_display")
             with choose_col:
                 st.write("")
                 choose_dir = st.download_button(
@@ -928,16 +938,6 @@ def main() -> None:
             st.caption("雲端模式：按「選擇」會觸發瀏覽器另存新檔，用來選本機資料夾（測試檔可刪除）。")
             st.caption("若未跳出選擇視窗，請在瀏覽器開啟『下載前一律詢問儲存位置』。")
 
-            server_presets = get_server_output_presets()
-            _cur = st.session_state.get("output_dir_raw", server_presets[0] if server_presets else "")
-            _def_idx = server_presets.index(_cur) if _cur in server_presets else 0
-            selected_server_dir = st.selectbox(
-                "伺服器暫存目錄",
-                options=server_presets,
-                index=_def_idx,
-                key="server_output_dir_select",
-            )
-            st.session_state["output_dir_raw"] = selected_server_dir
             output_dir_raw = selected_server_dir
         else:
             output_col, choose_col = st.columns([4, 1])
