@@ -494,13 +494,25 @@ def is_streamlit_cloud_environment() -> bool:
         os.getenv("STREAMLIT_RUNTIME_ENV", ""),
         os.getenv("STREAMLIT_SHARING_MODE", ""),
         os.getenv("IS_STREAMLIT_CLOUD", ""),
+        os.getenv("STREAMLIT_CLOUD", ""),
+        os.getenv("STREAMLIT_ENV", ""),
+        os.getenv("ENVIRONMENT", ""),
     ]
     normalized = [value.strip().lower() for value in markers if value]
-    if any(value in {"cloud", "true", "1", "sharing"} for value in normalized):
+    if any(value in {"cloud", "true", "1", "sharing", "production", "prod"} for value in normalized):
         return True
 
-    host = os.getenv("HOSTNAME", "").lower()
-    return host.endswith("streamlit.app")
+    host_markers = [
+        os.getenv("HOSTNAME", "").lower(),
+        os.getenv("HOST", "").lower(),
+        os.getenv("STREAMLIT_SERVER_ADDRESS", "").lower(),
+    ]
+    if any("streamlit.app" in marker for marker in host_markers if marker):
+        return True
+
+    # Streamlit Cloud commonly mounts repositories under /mount/src/<repo>.
+    cwd_text = str(Path.cwd()).replace("\\", "/").lower()
+    return cwd_text.startswith("/mount/src")
 
 
 def get_server_output_presets() -> list[str]:
@@ -958,9 +970,6 @@ def main() -> None:
         st.markdown("---")
         st.caption("部署維運")
         st.caption("推送到 main 分支可自動部署。")
-
-    if choose_dir and is_cloud:
-        append_task_log("已觸發瀏覽器另存新檔，可在本機選擇下載資料夾。")
 
     if choose_dir and not is_cloud:
         chosen_dir, choose_error = select_output_directory(st.session_state.get("output_dir_raw", ""))
