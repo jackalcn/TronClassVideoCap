@@ -1203,38 +1203,72 @@ def main() -> None:
                 append_task_log(f"下載完成: {output_file}")
 
                 zip_data, zip_name, subtitle_names = build_video_subtitle_zip(output_file)
-                option_list = ["僅下載影片"]
-                if zip_data:
-                    option_list.insert(0, "下載影片+字幕")
+                bundled_files = collect_video_and_subtitle_files(output_file)
+                subtitle_files = [path for path in bundled_files if path != output_file]
+                key_base = re.sub(r"[^A-Za-z0-9_]+", "_", output_file.stem).strip("_") or "video"
 
                 download_option = st.radio(
                     "完成後下載選項",
-                    options=option_list,
-                    horizontal=True,
+                    options=[
+                        "下載影片+字幕.zip",
+                        "下載影片+字幕(影片及字幕檔案分別下載)",
+                        "下載影片",
+                    ],
+                    horizontal=False,
                     key=f"download_option_{output_file.stem}",
                 )
 
-                if download_option == "下載影片+字幕" and zip_data:
-                    st.download_button(
-                        label="下載影片+字幕",
-                        data=zip_data,
-                        file_name=zip_name,
-                        mime="application/zip",
-                        use_container_width=True,
-                    )
-                    if subtitle_names:
-                        st.caption(f"壓縮檔已包含影片與 {len(subtitle_names)} 個字幕檔。")
-                    else:
-                        st.caption("未偵測到字幕檔，壓縮檔目前僅包含影片。")
-                elif output_file.exists():
-                    with output_file.open("rb") as file_handle:
+                if download_option == "下載影片+字幕.zip":
+                    if zip_data:
                         st.download_button(
-                            label="下載影片",
-                            data=file_handle,
+                            label="下載影片+字幕.zip",
+                            data=zip_data,
+                            file_name=zip_name,
+                            mime="application/zip",
+                            use_container_width=True,
+                            key=f"download_zip_{key_base}",
+                        )
+                        if subtitle_names:
+                            st.caption(f"壓縮檔已包含影片與 {len(subtitle_names)} 個字幕檔。")
+                        else:
+                            st.caption("未偵測到字幕檔，壓縮檔目前僅包含影片。")
+                    else:
+                        st.warning("目前無法建立影片+字幕壓縮檔，請改用其他下載選項。")
+                elif download_option == "下載影片+字幕(影片及字幕檔案分別下載)":
+                    if output_file.exists():
+                        st.download_button(
+                            label=f"下載影片 ({output_file.name})",
+                            data=output_file.read_bytes(),
                             file_name=output_file.name,
                             mime="video/mp4",
                             use_container_width=True,
+                            key=f"download_video_separate_{key_base}",
                         )
+                    else:
+                        st.warning("找不到影片檔，請重試下載。")
+
+                    if subtitle_files:
+                        st.caption("字幕檔案：")
+                        for idx, subtitle_path in enumerate(subtitle_files, start=1):
+                            st.download_button(
+                                label=f"下載字幕 {idx}: {subtitle_path.name}",
+                                data=subtitle_path.read_bytes(),
+                                file_name=subtitle_path.name,
+                                mime="text/plain",
+                                use_container_width=True,
+                                key=f"download_subtitle_{key_base}_{idx}",
+                            )
+                    else:
+                        st.info("未偵測到可下載字幕檔。")
+                elif output_file.exists():
+                    st.download_button(
+                        label="下載影片",
+                        data=output_file.read_bytes(),
+                        file_name=output_file.name,
+                        mime="video/mp4",
+                        use_container_width=True,
+                        key=f"download_video_only_{key_base}",
+                    )
                     if is_cloud:
                         st.caption("部署環境無法直接寫入你的電腦資料夾，請使用上方按鈕下載。")
                 else:
