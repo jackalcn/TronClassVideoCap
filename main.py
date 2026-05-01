@@ -40,6 +40,8 @@ SUBMIT_SELECTORS = (
     'button:has-text("Sign in")',
 )
 
+DEPLOY_VERIFY_COMMIT = "fcd0958"
+
 SUBTITLE_EXTENSIONS = {
     ".srt",
     ".vtt",
@@ -780,13 +782,14 @@ def render_workflow_steps(active_step: int) -> None:
         )
 
 
-def render_meta_badges(version: str, updated_at: str, deploy_target: str) -> None:
+def render_meta_badges(version: str, updated_at: str, deploy_target: str, verify_commit: str) -> None:
     st.markdown(
         (
             "<div class='badge-row'>"
             f"<div class='meta-badge'><span class='badge-dot'></span>版本 {version}</div>"
             f"<div class='meta-badge'><span class='badge-dot'></span>最後更新 {updated_at}</div>"
             f"<div class='meta-badge'><span class='badge-dot'></span>部署 {deploy_target}</div>"
+            f"<div class='meta-badge'><span class='badge-dot'></span>部署驗證 commit: {verify_commit}</div>"
             "</div>"
         ),
         unsafe_allow_html=True,
@@ -949,6 +952,7 @@ def main() -> None:
         version="v2026.05.02.2",
         updated_at="2026-05-02 03:20 (UTC+8)",
         deploy_target="main 分支自動部署",
+        verify_commit=DEPLOY_VERIFY_COMMIT,
     )
 
     render_workflow_steps(st.session_state.get("active_step", 1))
