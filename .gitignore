@@ -1,0 +1,21 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# App outputs
+downloads/
+
+# Streamlit / local settings
+.streamlit/secrets.toml
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.vscode/

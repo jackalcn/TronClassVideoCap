@@ -1,0 +1,18 @@
+[browser]
+gatherUsageStats = false
+
+[client]
+showSidebarNavigation = true
+
+[server]
+headless = true
+runOnSave = true
+maxUploadSize = 200
+
+[theme]
+base = "light"
+primaryColor = "#0E6A77"
+backgroundColor = "#F1F5FA"
+secondaryBackgroundColor = "#E8EFF7"
+textColor = "#1F2A3D"
+font = "sans serif"
