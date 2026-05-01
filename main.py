@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import subprocess
 import zipfile
 from io import BytesIO
 from datetime import datetime
@@ -40,7 +41,8 @@ SUBMIT_SELECTORS = (
     'button:has-text("Sign in")',
 )
 
-DEPLOY_VERIFY_COMMIT = "fcd0958"
+DEPLOY_VERIFY_MIN_COMMIT = "7f71b98"
+DEPLOY_MARKER = "build-2026-05-02-04"
 
 SUBTITLE_EXTENSIONS = {
     ".srt",
@@ -519,6 +521,37 @@ def get_server_output_presets() -> list[str]:
     return unique
 
 
+def detect_runtime_commit_short() -> str:
+    env_keys = [
+        "SOURCE_COMMIT",
+        "GITHUB_SHA",
+        "GIT_COMMIT",
+        "COMMIT_SHA",
+        "STREAMLIT_GIT_SHA",
+    ]
+
+    for key in env_keys:
+        value = os.getenv(key, "").strip()
+        if value:
+            return value[:7]
+
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=2,
+        )
+        commit_value = result.stdout.strip()
+        if result.returncode == 0 and commit_value:
+            return commit_value[:7]
+    except Exception:
+        pass
+
+    return DEPLOY_VERIFY_MIN_COMMIT
+
+
 def collect_video_and_subtitle_files(video_file: Path) -> list[Path]:
     if not video_file.exists():
         return []
@@ -782,14 +815,23 @@ def render_workflow_steps(active_step: int) -> None:
         )
 
 
-def render_meta_badges(version: str, updated_at: str, deploy_target: str, verify_commit: str) -> None:
+def render_meta_badges(
+    version: str,
+    updated_at: str,
+    deploy_target: str,
+    runtime_commit: str,
+    min_commit: str,
+    deploy_marker: str,
+) -> None:
     st.markdown(
         (
             "<div class='badge-row'>"
             f"<div class='meta-badge'><span class='badge-dot'></span>版本 {version}</div>"
             f"<div class='meta-badge'><span class='badge-dot'></span>最後更新 {updated_at}</div>"
             f"<div class='meta-badge'><span class='badge-dot'></span>部署 {deploy_target}</div>"
-            f"<div class='meta-badge'><span class='badge-dot'></span>部署驗證 commit: {verify_commit}</div>"
+            f"<div class='meta-badge'><span class='badge-dot'></span>Runtime commit: {runtime_commit}</div>"
+            f"<div class='meta-badge'><span class='badge-dot'></span>Baseline commit: {min_commit}</div>"
+            f"<div class='meta-badge'><span class='badge-dot'></span>Deploy marker: {deploy_marker}</div>"
             "</div>"
         ),
         unsafe_allow_html=True,
@@ -948,11 +990,14 @@ def main() -> None:
 
     st.markdown("<div class='hero-title'>TronClass 影片下載平台</div>", unsafe_allow_html=True)
     st.markdown("<div class='hero-subtitle'>課程頁面內嵌 Vimeo 影片與字幕一站式下載</div>", unsafe_allow_html=True)
+    runtime_commit = detect_runtime_commit_short()
     render_meta_badges(
-        version="v2026.05.02.2",
-        updated_at="2026-05-02 03:20 (UTC+8)",
+        version="v2026.05.02.3",
+        updated_at="2026-05-02 03:40 (UTC+8)",
         deploy_target="main 分支自動部署",
-        verify_commit=DEPLOY_VERIFY_COMMIT,
+        runtime_commit=runtime_commit,
+        min_commit=DEPLOY_VERIFY_MIN_COMMIT,
+        deploy_marker=DEPLOY_MARKER,
     )
 
     render_workflow_steps(st.session_state.get("active_step", 1))
