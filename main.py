@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import os
 import re
+import zipfile
+from io import BytesIO
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable, Optional
@@ -36,6 +39,18 @@ SUBMIT_SELECTORS = (
     'button:has-text("Log in")',
     'button:has-text("Sign in")',
 )
+
+SUBTITLE_EXTENSIONS = {
+    ".srt",
+    ".vtt",
+    ".ass",
+    ".ssa",
+    ".lrc",
+    ".ttml",
+    ".sbv",
+    ".dfxp",
+    ".xml",
+}
 
 
 def fill_first(page: Page, selectors: Iterable[str], value: str) -> Optional[str]:
@@ -470,6 +485,75 @@ def parse_subtitle_languages(raw: str) -> list[str]:
     return langs
 
 
+def is_streamlit_cloud_environment() -> bool:
+    markers = [
+        os.getenv("STREAMLIT_RUNTIME_ENV", ""),
+        os.getenv("STREAMLIT_SHARING_MODE", ""),
+        os.getenv("IS_STREAMLIT_CLOUD", ""),
+    ]
+    normalized = [value.strip().lower() for value in markers if value]
+    if any(value in {"cloud", "true", "1", "sharing"} for value in normalized):
+        return True
+
+    host = os.getenv("HOSTNAME", "").lower()
+    return host.endswith("streamlit.app")
+
+
+def get_server_output_presets() -> list[str]:
+    candidates = [
+        (Path.cwd() / "downloads").resolve(),
+        Path.cwd().resolve(),
+        Path("/tmp/videocap-downloads"),
+        Path("/tmp"),
+    ]
+
+    unique: list[str] = []
+    seen: set[str] = set()
+    for path in candidates:
+        text = str(path)
+        if text not in seen:
+            seen.add(text)
+            unique.append(text)
+    return unique
+
+
+def collect_video_and_subtitle_files(video_file: Path) -> list[Path]:
+    if not video_file.exists():
+        return []
+
+    files = [video_file]
+    base_name = video_file.stem
+    directory = video_file.parent
+
+    for candidate in directory.iterdir():
+        if not candidate.is_file() or candidate == video_file:
+            continue
+        if candidate.suffix.lower() not in SUBTITLE_EXTENSIONS:
+            continue
+
+        candidate_name = candidate.name
+        if candidate_name.startswith(f"{base_name}.") or candidate_name.startswith(f"{base_name}_"):
+            files.append(candidate)
+
+    files.sort(key=lambda path: (path.suffix.lower(), path.name.lower()))
+    return files
+
+
+def build_video_subtitle_zip(video_file: Path) -> tuple[Optional[bytes], str, list[str]]:
+    files = collect_video_and_subtitle_files(video_file)
+    if not files:
+        return None, "", []
+
+    zip_name = f"{video_file.stem}_bundle.zip"
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as bundle:
+        for path in files:
+            bundle.write(path, arcname=path.name)
+
+    subtitle_names = [path.name for path in files if path != video_file]
+    return buffer.getvalue(), zip_name, subtitle_names
+
+
 def select_output_directory(initial_dir: str) -> tuple[Optional[str], Optional[str]]:
     try:
         import tkinter as tk
@@ -746,6 +830,7 @@ def main() -> None:
     st.session_state.setdefault("last_status", "等待任務開始")
     st.session_state.setdefault("health_status", "")
     st.session_state.setdefault("health_message", "尚未執行健康檢查")
+    is_cloud = is_streamlit_cloud_environment()
 
     with st.sidebar:
         st.markdown("## 任務設定")
@@ -772,7 +857,23 @@ def main() -> None:
             output_dir_raw = st.text_input("下載資料夾", key="output_dir_raw")
         with choose_col:
             st.write("")
-            choose_dir = st.button("選擇", use_container_width=True)
+            choose_dir = st.button(
+                "選擇",
+                use_container_width=True,
+                disabled=is_cloud,
+                help="部署環境無法開啟本機資料夾視窗，請改用下方伺服器目錄選項。" if is_cloud else None,
+            )
+
+        if is_cloud:
+            st.caption("已偵測部署環境：無法開啟本機資料夾選擇器，請選擇伺服器可寫入目錄。")
+            server_presets = get_server_output_presets()
+            selected_server_dir = st.selectbox("伺服器輸出目錄", options=server_presets, index=0)
+            use_server_dir = st.button("套用伺服器目錄", use_container_width=True)
+            if use_server_dir:
+                st.session_state["output_dir_raw"] = selected_server_dir
+                output_dir_raw = selected_server_dir
+                append_task_log(f"已套用伺服器目錄: {selected_server_dir}")
+                st.rerun()
 
         st.selectbox("輸出格式", options=["MP4"], index=0, disabled=True)
         retry_count = st.slider("重試次數", min_value=1, max_value=10, value=3)
@@ -795,6 +896,11 @@ def main() -> None:
         st.caption("推送到 main 分支可自動部署。")
 
     if choose_dir:
+        if is_cloud:
+            message = "部署環境不支援本機資料夾選擇器，請使用伺服器輸出目錄。"
+            st.warning(message)
+            append_task_log(message)
+            st.rerun()
         chosen_dir, choose_error = select_output_directory(st.session_state.get("output_dir_raw", ""))
         if choose_error:
             st.warning(choose_error)
@@ -985,6 +1091,31 @@ def main() -> None:
 
                 st.success(f"下載完成：{output_file}")
                 append_task_log(f"下載完成: {output_file}")
+
+                zip_data, zip_name, subtitle_names = build_video_subtitle_zip(output_file)
+                if zip_data:
+                    st.download_button(
+                        label="下載影片＋字幕 ZIP",
+                        data=zip_data,
+                        file_name=zip_name,
+                        mime="application/zip",
+                        use_container_width=True,
+                    )
+                    if subtitle_names:
+                        st.caption(f"ZIP 已包含影片與 {len(subtitle_names)} 個字幕檔。")
+                    else:
+                        st.caption("未偵測到字幕檔，ZIP 目前僅包含影片。")
+
+                if is_cloud and output_file.exists():
+                    with output_file.open("rb") as file_handle:
+                        st.download_button(
+                            label="下載影片到本機",
+                            data=file_handle,
+                            file_name=output_file.name,
+                            mime="video/mp4",
+                            use_container_width=True,
+                        )
+                    st.caption("部署環境無法直接寫入你的電腦資料夾，請使用上方按鈕下載。")
 
                 if download_subtitles:
                     if has_requested_subs:
