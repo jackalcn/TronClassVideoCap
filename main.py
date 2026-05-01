@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 import subprocess
 import zipfile
 from io import BytesIO
@@ -55,6 +56,8 @@ SUBTITLE_EXTENSIONS = {
     ".dfxp",
     ".xml",
 }
+
+_PLAYWRIGHT_CHROMIUM_READY = False
 
 
 def fill_first(page: Page, selectors: Iterable[str], value: str) -> Optional[str]:
@@ -281,7 +284,7 @@ def resolve_vimeo_and_cookies(
     cookies_file = output_dir / "tronclass_cookies.txt"
 
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=headless)
+        browser = launch_chromium_with_bootstrap(playwright, headless=headless, status_ui=status_ui)
         context = browser.new_context()
         page = context.new_page()
 
@@ -313,6 +316,52 @@ def resolve_vimeo_and_cookies(
         browser.close()
 
     return vimeo_url, cookies_file
+
+
+def is_missing_playwright_executable_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    markers = [
+        "executable doesn't exist",
+        "please run the following command to download new browsers",
+        "playwright install",
+    ]
+    return any(marker in message for marker in markers)
+
+
+def ensure_playwright_chromium_installed(status_ui) -> None:
+    global _PLAYWRIGHT_CHROMIUM_READY
+    if _PLAYWRIGHT_CHROMIUM_READY:
+        return
+
+    status_ui.info("0/4 偵測到 Playwright Chromium 缺失，正在安裝（首次可能需要 1-3 分鐘）")
+    install_cmd = [sys.executable, "-m", "playwright", "install", "chromium"]
+    result = subprocess.run(
+        install_cmd,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=900,
+    )
+    if result.returncode != 0:
+        stderr_text = (result.stderr or "").strip()
+        stdout_text = (result.stdout or "").strip()
+        details = stderr_text or stdout_text or "unknown error"
+        raise RuntimeError(f"Playwright Chromium 安裝失敗：{details}")
+
+    _PLAYWRIGHT_CHROMIUM_READY = True
+    status_ui.info("0/4 Playwright Chromium 安裝完成，繼續執行登入流程")
+
+
+def launch_chromium_with_bootstrap(playwright, headless: bool, status_ui):
+    for attempt in range(2):
+        try:
+            return playwright.chromium.launch(headless=headless)
+        except Exception as exc:
+            if attempt == 0 and is_missing_playwright_executable_error(exc):
+                ensure_playwright_chromium_installed(status_ui)
+                continue
+            raise
+    raise RuntimeError("無法啟動 Playwright Chromium")
 
 
 def download_with_ytdlp(
