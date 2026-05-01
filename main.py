@@ -994,36 +994,12 @@ def main() -> None:
                 key="server_output_dir_select",
             )
 
-            output_col, choose_col = st.columns([4, 1])
-            with output_col:
-                st.text_input("下載資料夾", value=selected_server_dir, disabled=True, key="cloud_output_dir_display")
-            with choose_col:
-                st.write("")
-                choose_dir = st.download_button(
-                    "選擇",
-                    data=b"This is a folder picker probe file for browser save dialog. You can delete it.",
-                    file_name="select-download-folder.txt",
-                    mime="text/plain",
-                    use_container_width=True,
-                    help="雲端環境會由瀏覽器另存新檔視窗選擇本機資料夾。",
-                    key="cloud_choose_dir_probe",
-                )
-
-            st.caption("雲端模式：按「選擇」會觸發瀏覽器另存新檔，用來選本機資料夾（測試檔可刪除）。")
-            st.caption("若未跳出選擇視窗，請在瀏覽器開啟『下載前一律詢問儲存位置』。")
+            st.text_input("下載資料夾", value=selected_server_dir, disabled=True, key="cloud_output_dir_display")
+            st.caption("雲端模式：下載完成後請使用下方下載按鈕存到本機。")
 
             output_dir_raw = selected_server_dir
         else:
-            output_col, choose_col = st.columns([4, 1])
-            with output_col:
-                output_dir_raw = st.text_input("下載資料夾", key="output_dir_raw")
-            with choose_col:
-                st.write("")
-                choose_dir = st.button(
-                    "選擇",
-                    use_container_width=True,
-                    help="開啟本機資料夾選擇視窗",
-                )
+            output_dir_raw = st.text_input("下載資料夾", key="output_dir_raw")
 
         st.selectbox("輸出格式", options=["MP4"], index=0, disabled=True)
         retry_count = st.slider("重試次數", min_value=1, max_value=10, value=3)
@@ -1044,16 +1020,6 @@ def main() -> None:
         st.markdown("---")
         st.caption("部署維運")
         st.caption("推送到 main 分支可自動部署。")
-
-    if choose_dir and not is_cloud:
-        chosen_dir, choose_error = select_output_directory(st.session_state.get("output_dir_raw", ""))
-        if choose_error:
-            st.warning(choose_error)
-            append_task_log(choose_error)
-        elif chosen_dir:
-            st.session_state["output_dir_raw"] = chosen_dir
-            append_task_log(f"已選擇下載資料夾: {chosen_dir}")
-        st.rerun()
 
     if clear_logs:
         st.session_state["task_logs"] = []
@@ -1076,8 +1042,6 @@ def main() -> None:
         min_commit=DEPLOY_VERIFY_MIN_COMMIT,
         deploy_marker=DEPLOY_MARKER,
     )
-
-    render_workflow_steps(st.session_state.get("active_step", 1))
 
     status_placeholder = st.empty()
     health_placeholder = st.empty()
@@ -1128,7 +1092,6 @@ def main() -> None:
                 st.session_state["active_step"] = min(max(current, 1), 4)
                 st.session_state["stage_progress"] = stage_fraction
                 self.stage_ui.progress(stage_fraction, text=f"流程進度: {int(stage_fraction * 100)}%")
-                render_workflow_steps(st.session_state["active_step"])
             self.placeholder.markdown(
                 f"<div class='status-card'><strong>{message}</strong></div>",
                 unsafe_allow_html=True,
@@ -1204,7 +1167,6 @@ def main() -> None:
                 st.session_state["stage_progress"] = 1.0
                 st.session_state["active_step"] = 4
                 stage_progress_ui.progress(1.0, text="流程進度: 100%")
-                render_workflow_steps(4)
                 st.success("連結健康檢查完成，未下載影片。")
                 render_subtitle_debug_report(subtitle_debug_report)
             else:
@@ -1236,35 +1198,47 @@ def main() -> None:
                 st.session_state["stage_progress"] = 1.0
                 st.session_state["active_step"] = 4
                 stage_progress_ui.progress(1.0, text="流程進度: 100%")
-                render_workflow_steps(4)
 
                 st.success(f"下載完成：{output_file}")
                 append_task_log(f"下載完成: {output_file}")
 
                 zip_data, zip_name, subtitle_names = build_video_subtitle_zip(output_file)
+                option_list = ["僅下載影片"]
                 if zip_data:
+                    option_list.insert(0, "下載影片+字幕")
+
+                download_option = st.radio(
+                    "完成後下載選項",
+                    options=option_list,
+                    horizontal=True,
+                    key=f"download_option_{output_file.stem}",
+                )
+
+                if download_option == "下載影片+字幕" and zip_data:
                     st.download_button(
-                        label="下載影片＋字幕 ZIP",
+                        label="下載影片+字幕",
                         data=zip_data,
                         file_name=zip_name,
                         mime="application/zip",
                         use_container_width=True,
                     )
                     if subtitle_names:
-                        st.caption(f"ZIP 已包含影片與 {len(subtitle_names)} 個字幕檔。")
+                        st.caption(f"壓縮檔已包含影片與 {len(subtitle_names)} 個字幕檔。")
                     else:
-                        st.caption("未偵測到字幕檔，ZIP 目前僅包含影片。")
-
-                if is_cloud and output_file.exists():
+                        st.caption("未偵測到字幕檔，壓縮檔目前僅包含影片。")
+                elif output_file.exists():
                     with output_file.open("rb") as file_handle:
                         st.download_button(
-                            label="下載影片到本機",
+                            label="下載影片",
                             data=file_handle,
                             file_name=output_file.name,
                             mime="video/mp4",
                             use_container_width=True,
                         )
-                    st.caption("部署環境無法直接寫入你的電腦資料夾，請使用上方按鈕下載。")
+                    if is_cloud:
+                        st.caption("部署環境無法直接寫入你的電腦資料夾，請使用上方按鈕下載。")
+                else:
+                    st.warning("找不到影片檔，請重試下載。")
 
                 if download_subtitles:
                     if has_requested_subs:
