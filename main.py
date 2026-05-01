@@ -898,19 +898,35 @@ def main() -> None:
             custom_name = st.text_input("自訂檔名", value="lesson_video")
 
         if is_cloud:
+            output_col, choose_col = st.columns([4, 1])
+            with output_col:
+                output_dir_raw = st.text_input("下載資料夾", key="output_dir_raw", disabled=True)
+            with choose_col:
+                st.write("")
+                choose_dir = st.download_button(
+                    "選擇",
+                    data=b"This is a folder picker probe file for browser save dialog. You can delete it.",
+                    file_name="select-download-folder.txt",
+                    mime="text/plain",
+                    use_container_width=True,
+                    help="雲端環境會由瀏覽器另存新檔視窗選擇本機資料夾。",
+                    key="cloud_choose_dir_probe",
+                )
+
+            st.caption("雲端模式：按「選擇」會觸發瀏覽器另存新檔，用來選本機資料夾（測試檔可刪除）。")
+            st.caption("若未跳出選擇視窗，請在瀏覽器開啟『下載前一律詢問儲存位置』。")
+
             server_presets = get_server_output_presets()
             _cur = st.session_state.get("output_dir_raw", server_presets[0] if server_presets else "")
             _def_idx = server_presets.index(_cur) if _cur in server_presets else 0
             selected_server_dir = st.selectbox(
-                "下載資料夾",
+                "伺服器暫存目錄",
                 options=server_presets,
                 index=_def_idx,
                 key="server_output_dir_select",
             )
             st.session_state["output_dir_raw"] = selected_server_dir
             output_dir_raw = selected_server_dir
-            choose_dir = False
-            st.caption("部署環境：已自動列出伺服器可寫入目錄，選取即生效。")
         else:
             output_col, choose_col = st.columns([4, 1])
             with output_col:
@@ -943,7 +959,10 @@ def main() -> None:
         st.caption("部署維運")
         st.caption("推送到 main 分支可自動部署。")
 
-    if choose_dir:
+    if choose_dir and is_cloud:
+        append_task_log("已觸發瀏覽器另存新檔，可在本機選擇下載資料夾。")
+
+    if choose_dir and not is_cloud:
         chosen_dir, choose_error = select_output_directory(st.session_state.get("output_dir_raw", ""))
         if choose_error:
             st.warning(choose_error)
@@ -961,7 +980,6 @@ def main() -> None:
         st.session_state["last_status"] = "等待任務開始"
         st.session_state["health_status"] = ""
         st.session_state["health_message"] = "尚未執行健康檢查"
-        st.session_state["show_server_dir_selector"] = False
         st.success("任務歷程已清除。")
 
     st.markdown("<div class='hero-title'>TronClass 影片下載平台</div>", unsafe_allow_html=True)
