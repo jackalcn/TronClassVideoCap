@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 import sys
+import time
 import subprocess
 import zipfile
 from io import BytesIO
@@ -88,26 +89,46 @@ def normalize_url(src: str, base_url: str) -> str:
     return urljoin(base_url, src)
 
 
-def find_vimeo_player_url(page: Page) -> Optional[str]:
-    for attr in ("src", "data-src"):
-        locator = page.locator(f'iframe[{attr}*="player.vimeo.com/video/"]')
-        if locator.count() > 0:
-            raw = locator.first.get_attribute(attr)
-            if raw:
-                return normalize_url(raw, page.url)
-
-    html = page.content()
-
+def find_vimeo_player_url(page: Page, timeout_ms: int = 25000) -> Optional[str]:
     patterns = (
         r"https?://player\\.vimeo\\.com/video/\\d+[^\"'\\s<]*",
         r"//player\\.vimeo\\.com/video/\\d+[^\"'\\s<]*",
         r"https?://vimeo\\.com/\\d+",
     )
 
-    for pattern in patterns:
-        match = re.search(pattern, html)
-        if match:
-            return normalize_url(match.group(0), page.url)
+    deadline = time.time() + max(timeout_ms, 1000) / 1000.0
+    while time.time() < deadline:
+        for attr in ("src", "data-src"):
+            locator = page.locator(f'iframe[{attr}*="player.vimeo.com/video/"]')
+            if locator.count() > 0:
+                raw = locator.first.get_attribute(attr)
+                if raw:
+                    return normalize_url(raw, page.url)
+
+        for frame in page.frames:
+            frame_url = (frame.url or "").strip()
+            if "player.vimeo.com/video/" in frame_url or re.search(r"https?://vimeo\\.com/\\d+", frame_url):
+                return normalize_url(frame_url, page.url)
+
+        html_sources: list[str] = []
+        try:
+            html_sources.append(page.content())
+        except Exception:
+            pass
+
+        for frame in page.frames:
+            try:
+                html_sources.append(frame.content())
+            except Exception:
+                continue
+
+        for html in html_sources:
+            for pattern in patterns:
+                match = re.search(pattern, html)
+                if match:
+                    return normalize_url(match.group(0), page.url)
+
+        page.wait_for_timeout(1000)
 
     return None
 
@@ -304,7 +325,11 @@ def resolve_vimeo_and_cookies(
 
         status_ui.info("2/4 前往含影片的課程頁面")
         page.goto(video_page_url, wait_until="domcontentloaded", timeout=30000)
-        page.wait_for_timeout(2000)
+        try:
+            page.wait_for_load_state("networkidle", timeout=10000)
+        except Exception:
+            # Some SPA pages keep long-lived requests; continue with URL probing.
+            pass
 
         vimeo_url = find_vimeo_player_url(page)
         if not vimeo_url:
