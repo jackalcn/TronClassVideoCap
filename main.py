@@ -830,6 +830,7 @@ def main() -> None:
     st.session_state.setdefault("last_status", "等待任務開始")
     st.session_state.setdefault("health_status", "")
     st.session_state.setdefault("health_message", "尚未執行健康檢查")
+    st.session_state.setdefault("show_server_dir_selector", False)
     is_cloud = is_streamlit_cloud_environment()
 
     with st.sidebar:
@@ -865,14 +866,37 @@ def main() -> None:
 
         if is_cloud:
             st.caption("已偵測部署環境：無法開啟本機資料夾選擇器，請選擇伺服器可寫入目錄。")
-            server_presets = get_server_output_presets()
-            selected_server_dir = st.selectbox("伺服器輸出目錄", options=server_presets, index=0)
-            use_server_dir = st.button("套用伺服器目錄", use_container_width=True)
-            if use_server_dir:
-                st.session_state["output_dir_raw"] = selected_server_dir
-                output_dir_raw = selected_server_dir
-                append_task_log(f"已套用伺服器目錄: {selected_server_dir}")
-                st.rerun()
+            if st.session_state.get("show_server_dir_selector", False):
+                server_presets = get_server_output_presets()
+                current_output = st.session_state.get("output_dir_raw", "")
+                default_index = 0
+                if current_output in server_presets:
+                    default_index = server_presets.index(current_output)
+
+                selected_server_dir = st.selectbox(
+                    "伺服器輸出目錄",
+                    options=server_presets,
+                    index=default_index,
+                    key="server_output_dir_select",
+                )
+                apply_col, cancel_col = st.columns(2)
+                with apply_col:
+                    apply_server_dir = st.button("套用", use_container_width=True, key="apply_server_dir_btn")
+                with cancel_col:
+                    cancel_server_dir = st.button("取消", use_container_width=True, key="cancel_server_dir_btn")
+
+                if apply_server_dir:
+                    st.session_state["output_dir_raw"] = selected_server_dir
+                    st.session_state["show_server_dir_selector"] = False
+                    append_task_log(f"已套用伺服器目錄: {selected_server_dir}")
+                    st.rerun()
+
+                if cancel_server_dir:
+                    st.session_state["show_server_dir_selector"] = False
+                    append_task_log("已取消伺服器目錄選擇")
+                    st.rerun()
+            else:
+                st.caption("按「選擇」即可開啟伺服器目錄下拉選單。")
 
         st.selectbox("輸出格式", options=["MP4"], index=0, disabled=True)
         retry_count = st.slider("重試次數", min_value=1, max_value=10, value=3)
@@ -896,16 +920,8 @@ def main() -> None:
 
     if choose_dir:
         if is_cloud:
-            server_presets = get_server_output_presets()
-            current_output = st.session_state.get("output_dir_raw", "")
-            next_dir = server_presets[0]
-            if current_output in server_presets:
-                current_index = server_presets.index(current_output)
-                next_dir = server_presets[(current_index + 1) % len(server_presets)]
-            st.session_state["output_dir_raw"] = next_dir
-            message = f"部署環境已切換輸出目錄：{next_dir}"
-            st.success(message)
-            append_task_log(message)
+            st.session_state["show_server_dir_selector"] = True
+            append_task_log("已開啟伺服器目錄選單")
             st.rerun()
         chosen_dir, choose_error = select_output_directory(st.session_state.get("output_dir_raw", ""))
         if choose_error:
@@ -924,6 +940,7 @@ def main() -> None:
         st.session_state["last_status"] = "等待任務開始"
         st.session_state["health_status"] = ""
         st.session_state["health_message"] = "尚未執行健康檢查"
+        st.session_state["show_server_dir_selector"] = False
         st.success("任務歷程已清除。")
 
     st.markdown("<div class='hero-title'>TronClass 影片下載平台</div>", unsafe_allow_html=True)
