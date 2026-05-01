@@ -860,8 +860,7 @@ def main() -> None:
             choose_dir = st.button(
                 "選擇",
                 use_container_width=True,
-                disabled=is_cloud,
-                help="部署環境無法開啟本機資料夾視窗，請改用下方伺服器目錄選項。" if is_cloud else None,
+                help="本機會開啟資料夾視窗；部署環境會切換到伺服器可寫入目錄。",
             )
 
         if is_cloud:
@@ -897,8 +896,15 @@ def main() -> None:
 
     if choose_dir:
         if is_cloud:
-            message = "部署環境不支援本機資料夾選擇器，請使用伺服器輸出目錄。"
-            st.warning(message)
+            server_presets = get_server_output_presets()
+            current_output = st.session_state.get("output_dir_raw", "")
+            next_dir = server_presets[0]
+            if current_output in server_presets:
+                current_index = server_presets.index(current_output)
+                next_dir = server_presets[(current_index + 1) % len(server_presets)]
+            st.session_state["output_dir_raw"] = next_dir
+            message = f"部署環境已切換輸出目錄：{next_dir}"
+            st.success(message)
             append_task_log(message)
             st.rerun()
         chosen_dir, choose_error = select_output_directory(st.session_state.get("output_dir_raw", ""))
