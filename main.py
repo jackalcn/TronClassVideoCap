@@ -44,7 +44,7 @@ SUBMIT_SELECTORS = (
 )
 
 DEPLOY_VERIFY_MIN_COMMIT = "7f71b98"
-DEPLOY_MARKER = "build-2026-05-15-01"
+DEPLOY_MARKER = "build-2026-05-15-02"
 
 SUBTITLE_EXTENSIONS = {
     ".srt",
@@ -408,10 +408,10 @@ def launch_chromium_with_bootstrap(playwright, headless: bool, status_ui):
                     "Playwright Chromium 啟動失敗：Linux 系統缺少共享函式庫"
                     f"{missing_text}。"
                     "請在部署環境安裝必要套件後重新部署。"
-                    "若使用 Streamlit Cloud，請在 packages.txt 確認以下套件："
-                    "libnspr4, libnss3, libatk1.0-0, libatk-bridge2.0-0, libasound2, libgbm1, "
-                    "libxkbcommon0, libxcomposite1, libxdamage1, libxfixes3, libxrandr2, libdrm2, "
-                    "libatspi2.0-0, libcups2。"
+                    "若使用 Streamlit Cloud，先在 packages.txt 保留最小集合："
+                    "libnspr4, libnss3（另可保留 ffmpeg）。"
+                    "若仍缺少 .so，再依錯誤訊息逐一追加單一套件；"
+                    "避免一次加入大量 GUI 套件，以免觸發 apt 衝突（例如 libasound2 與 libasound2t64）。"
                 ) from exc
             raise
     raise RuntimeError("無法啟動 Playwright Chromium")
@@ -1145,8 +1145,8 @@ def main() -> None:
     st.markdown("<div class='hero-subtitle'>課程頁面內嵌 Vimeo 影片與字幕一站式下載</div>", unsafe_allow_html=True)
     runtime_commit = detect_runtime_commit_short()
     render_meta_badges(
-        version="v2026.05.15.1",
-        updated_at="2026-05-15 00:30 (UTC+8)",
+        version="v2026.05.15.2",
+        updated_at="2026-05-15 01:10 (UTC+8)",
         deploy_target="main 分支自動部署",
         runtime_commit=runtime_commit,
         min_commit=DEPLOY_VERIFY_MIN_COMMIT,
