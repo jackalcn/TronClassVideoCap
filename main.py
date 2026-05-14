@@ -44,7 +44,7 @@ SUBMIT_SELECTORS = (
 )
 
 DEPLOY_VERIFY_MIN_COMMIT = "7f71b98"
-DEPLOY_MARKER = "build-2026-05-02-04"
+DEPLOY_MARKER = "build-2026-05-15-01"
 
 SUBTITLE_EXTENSIONS = {
     ".srt",
@@ -353,6 +353,22 @@ def is_missing_playwright_executable_error(exc: Exception) -> bool:
     return any(marker in message for marker in markers)
 
 
+def is_missing_playwright_linux_dependency_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return (
+        "error while loading shared libraries" in message
+        or ("cannot open shared object file" in message and ".so" in message)
+    )
+
+
+def extract_missing_shared_library(exc: Exception) -> str:
+    message = str(exc)
+    match = re.search(r"error while loading shared libraries:\s*([^:\s]+)", message, flags=re.IGNORECASE)
+    if match:
+        return match.group(1)
+    return ""
+
+
 def ensure_playwright_chromium_installed(status_ui) -> None:
     global _PLAYWRIGHT_CHROMIUM_READY
     if _PLAYWRIGHT_CHROMIUM_READY:
@@ -385,6 +401,18 @@ def launch_chromium_with_bootstrap(playwright, headless: bool, status_ui):
             if attempt == 0 and is_missing_playwright_executable_error(exc):
                 ensure_playwright_chromium_installed(status_ui)
                 continue
+            if is_missing_playwright_linux_dependency_error(exc):
+                missing_lib = extract_missing_shared_library(exc)
+                missing_text = f"（缺少 {missing_lib}）" if missing_lib else ""
+                raise RuntimeError(
+                    "Playwright Chromium 啟動失敗：Linux 系統缺少共享函式庫"
+                    f"{missing_text}。"
+                    "請在部署環境安裝必要套件後重新部署。"
+                    "若使用 Streamlit Cloud，請在 packages.txt 確認以下套件："
+                    "libnspr4, libnss3, libatk1.0-0, libatk-bridge2.0-0, libasound2, libgbm1, "
+                    "libxkbcommon0, libxcomposite1, libxdamage1, libxfixes3, libxrandr2, libdrm2, "
+                    "libatspi2.0-0, libcups2。"
+                ) from exc
             raise
     raise RuntimeError("無法啟動 Playwright Chromium")
 
@@ -1117,8 +1145,8 @@ def main() -> None:
     st.markdown("<div class='hero-subtitle'>課程頁面內嵌 Vimeo 影片與字幕一站式下載</div>", unsafe_allow_html=True)
     runtime_commit = detect_runtime_commit_short()
     render_meta_badges(
-        version="v2026.05.02.3",
-        updated_at="2026-05-02 03:40 (UTC+8)",
+        version="v2026.05.15.1",
+        updated_at="2026-05-15 00:30 (UTC+8)",
         deploy_target="main 分支自動部署",
         runtime_commit=runtime_commit,
         min_commit=DEPLOY_VERIFY_MIN_COMMIT,
