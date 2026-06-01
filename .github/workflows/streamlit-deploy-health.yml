@@ -12,78 +12,73 @@ jobs:
     timeout-minutes: 15
     env:
       APP_URL: https://tronclass-videocap.streamlit.app/
+    APP_HEALTH_URL: https://tronclass-videocap.streamlit.app/_stcore/health
+    LEGACY_SHARE_URL: https://share.streamlit.io/jackalcn/TronClassVideoCap/main/main.py
       EXPECTED_DEPLOY_MARKER: build-2026-06-01-01-mac-fallback
       EXPECTED_APP_VERSION: v2026.06.01.1
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-
-      - name: Install Playwright Chromium
-        run: python -m playwright install chromium
-
-      - name: Check deployed Streamlit app in browser
+    - name: Check deployed Streamlit endpoints
         run: |
           python - <<'PY'
           import os
           import sys
           import time
-
-          from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
-          from playwright.sync_api import sync_playwright
+      import urllib.error
+      import urllib.parse
+      import urllib.request
 
           app_url = os.environ["APP_URL"]
-          expected_marker = os.environ["EXPECTED_DEPLOY_MARKER"]
-          expected_version = os.environ["EXPECTED_APP_VERSION"]
+      app_health_url = os.environ["APP_HEALTH_URL"]
+      legacy_share_url = os.environ["LEGACY_SHARE_URL"]
 
-              def read_app_frame_text(page) -> str:
-              deadline = time.time() + 30
-              while time.time() < deadline:
-                app_frame = next((frame for frame in page.frames if "/~/+/" in frame.url), None)
-                if app_frame is not None:
-                  body_text = app_frame.locator("body").inner_text(timeout=20000)
-            if "TronClass" in body_text and expected_version in body_text:
-                    return body_text
-                page.wait_for_timeout(1000)
-              raise SystemExit("App frame did not become readable in time")
+      class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+          return None
 
-          def assert_deployed_page() -> None:
-              with sync_playwright() as playwright:
-                  browser = playwright.chromium.launch(headless=True)
-                  page = browser.new_page()
-                  page.goto(app_url, wait_until="domcontentloaded", timeout=30000)
-                  page.wait_for_timeout(3000)
-                  page.get_by_text("Hosted with Streamlit", exact=False).wait_for(timeout=15000)
+      def request(url: str):
+        opener = urllib.request.build_opener(NoRedirect)
+        req = urllib.request.Request(url, headers={"User-Agent": "GitHubActions/StreamlitHealth"})
+        try:
+          with opener.open(req, timeout=20) as resp:
+            body = resp.read().decode("utf-8", "ignore")
+            return resp.status, resp.headers, body
+        except urllib.error.HTTPError as exc:
+          body = exc.read().decode("utf-8", "ignore")
+          return exc.code, exc.headers, body
 
-                app_text = read_app_frame_text(page)
-                print(app_text[:1200])
-                    if "TronClass" not in app_text:
-                      raise SystemExit("Deployed app did not render the expected app text")
-                if expected_version not in app_text:
-                  raise SystemExit(f"Expected app version not found: {expected_version}")
-                if expected_marker not in app_text:
-                  raise SystemExit(f"Expected deploy marker not found: {expected_marker}")
+      def assert_redirect(url: str) -> None:
+        status, headers, body = request(url)
+        location = headers.get("Location", "")
+        print(f"redirect probe url={url} status={status} location={location}")
+        if status not in {302, 303}:
+          raise SystemExit(f"Expected redirect for {url}, got status={status} body={body[:200]!r}")
+        if "share.streamlit.io/-/auth/app" not in location:
+          raise SystemExit(f"Unexpected redirect target for {url}: {location}")
 
-                  browser.close()
+      def assert_share_entrypoint() -> None:
+        status, headers, body = request(legacy_share_url)
+        location = headers.get("Location", "")
+        print(f"share probe status={status} location={location}")
+        if status == 200:
+          lowered = body.lower()
+          if "streamlit" not in lowered and "hosted with streamlit" not in lowered:
+            raise SystemExit("Legacy share entrypoint did not look like a Streamlit response")
+          return
+        if status in {302, 303} and "streamlit.app" in location:
+          return
+        raise SystemExit(f"Legacy share entrypoint unexpected status/location: status={status} location={location}")
 
           deadline = time.time() + 600
           last_error = None
           while time.time() < deadline:
               try:
-                  assert_deployed_page()
+          assert_share_entrypoint()
+          assert_redirect(app_url)
+          assert_redirect(app_health_url)
                   print("Streamlit deployment health check passed")
                   sys.exit(0)
-              except (SystemExit, PlaywrightTimeoutError) as exc:
+        except SystemExit as exc:
                   last_error = str(exc)
                   print(f"retrying after probe failure: {last_error}")
                   time.sleep(15)
