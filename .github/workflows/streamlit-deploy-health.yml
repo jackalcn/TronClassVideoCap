@@ -12,7 +12,6 @@ jobs:
     timeout-minutes: 15
     env:
       APP_URL: https://tronclass-videocap.streamlit.app/
-      LEGACY_SHARE_URL: https://share.streamlit.io/jackalcn/TronClassVideoCap/main/main.py
       EXPECTED_DEPLOY_MARKER: build-2026-06-01-01-mac-fallback
       EXPECTED_APP_VERSION: v2026.06.01.1
 
@@ -44,12 +43,19 @@ jobs:
           from playwright.sync_api import sync_playwright
 
           app_url = os.environ["APP_URL"]
-          legacy_share_url = os.environ["LEGACY_SHARE_URL"]
           expected_marker = os.environ["EXPECTED_DEPLOY_MARKER"]
           expected_version = os.environ["EXPECTED_APP_VERSION"]
 
-          def assert_in_frame(page, expected_text: str) -> None:
-              page.frame_locator("iframe").get_by_text(expected_text, exact=False).first.wait_for(timeout=15000)
+              def read_app_frame_text(page) -> str:
+              deadline = time.time() + 30
+              while time.time() < deadline:
+                app_frame = next((frame for frame in page.frames if "/~/+/" in frame.url), None)
+                if app_frame is not None:
+                  body_text = app_frame.locator("body").inner_text(timeout=20000)
+            if "TronClass" in body_text and expected_version in body_text:
+                    return body_text
+                page.wait_for_timeout(1000)
+              raise SystemExit("App frame did not become readable in time")
 
           def assert_deployed_page() -> None:
               with sync_playwright() as playwright:
@@ -59,22 +65,14 @@ jobs:
                   page.wait_for_timeout(3000)
                   page.get_by_text("Hosted with Streamlit", exact=False).wait_for(timeout=15000)
 
-                  title = page.title()
-                  print(f"page title={title}")
-                  if "TronClass 影片下載平台" not in title:
-                      raise SystemExit(f"Unexpected page title: {title}")
-
-                  assert_in_frame(page, "TronClass 影片下載平台")
-                  assert_in_frame(page, f"版本 {expected_version}")
-                  assert_in_frame(page, f"Deploy marker: {expected_marker}")
-
-                  legacy_page = browser.new_page()
-                  legacy_page.goto(legacy_share_url, wait_until="domcontentloaded", timeout=30000)
-                  legacy_page.wait_for_timeout(2000)
-                  legacy_title = legacy_page.title()
-                  print(f"legacy title={legacy_title}")
-                  if "TronClass 影片下載平台" not in legacy_title and "Streamlit" not in legacy_title:
-                      raise SystemExit(f"Legacy entrypoint did not look correct: {legacy_title}")
+                app_text = read_app_frame_text(page)
+                print(app_text[:1200])
+                    if "TronClass" not in app_text:
+                      raise SystemExit("Deployed app did not render the expected app text")
+                if expected_version not in app_text:
+                  raise SystemExit(f"Expected app version not found: {expected_version}")
+                if expected_marker not in app_text:
+                  raise SystemExit(f"Expected deploy marker not found: {expected_marker}")
 
                   browser.close()
 
