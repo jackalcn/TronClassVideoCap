@@ -417,6 +417,17 @@ def is_missing_playwright_executable_error(exc: Exception) -> bool:
     return any(marker in message for marker in markers)
 
 
+def get_missing_playwright_linux_shared_library(exc: Exception) -> str | None:
+    message = str(exc)
+    if "error while loading shared libraries:" not in message.lower():
+        return None
+
+    match = re.search(r"error while loading shared libraries:\s*([^:\s]+)", message, re.IGNORECASE)
+    if match:
+        return match.group(1)
+    return "unknown shared library"
+
+
 def ensure_playwright_chromium_installed(status_ui: StatusUI) -> None:
     global playwright_chromium_ready
     if playwright_chromium_ready:
@@ -446,6 +457,12 @@ def launch_chromium_with_bootstrap(playwright: Playwright, headless: bool, statu
         try:
             return playwright.chromium.launch(headless=headless)
         except Exception as exc:
+            missing_library = get_missing_playwright_linux_shared_library(exc)
+            if missing_library is not None:
+                raise RuntimeError(
+                    f"Playwright Chromium 啟動失敗：缺少 Linux 系統函式庫 {missing_library}。"
+                    "若為 Streamlit Cloud，請在 packages.txt 安裝 libnspr4 與 libnss3 後重新部署。"
+                ) from exc
             if attempt == 0 and is_missing_playwright_executable_error(exc):
                 ensure_playwright_chromium_installed(status_ui)
                 continue
