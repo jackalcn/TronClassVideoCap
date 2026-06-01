@@ -861,29 +861,110 @@ def apply_custom_style() -> None:
                 font-size: 15px;
                 margin-bottom: 18px;
             }
+            .meta-panel {
+                margin: 12px 0 22px;
+                padding: 18px 20px;
+                background: linear-gradient(135deg, rgba(255, 255, 255, 0.98), rgba(232, 246, 248, 0.9));
+                border: 1px solid #d7e7ee;
+                border-radius: 18px;
+                box-shadow: 0 16px 34px rgba(18, 37, 66, 0.08);
+            }
+            .meta-panel-caption {
+                margin-bottom: 12px;
+                color: #5d738d;
+                font-size: 12px;
+                font-weight: 700;
+                letter-spacing: 0.14em;
+                text-transform: uppercase;
+            }
             .badge-row {
                 display: flex;
                 flex-wrap: wrap;
-                gap: 10px;
-                margin-bottom: 18px;
+                gap: 12px;
+            }
+            .badge-row-primary {
+                margin-bottom: 14px;
             }
             .meta-badge {
-                display: inline-flex;
+                display: flex;
                 align-items: center;
-        filename = str(ydl.prepare_filename(cast(Any, info)))
-                padding: 8px 12px;
-                background: #ffffff;
-                border: 1px solid #d8e6ef;
+                gap: 10px;
+                flex: 1 1 210px;
+                min-width: 0;
+                padding: 12px 14px;
+                background: rgba(255, 255, 255, 0.9);
+                border: 1px solid #d5e5ec;
+                border-radius: 14px;
+                box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.65);
+            }
+            .badge-dot {
+                width: 10px;
+                height: 10px;
+                flex: 0 0 10px;
                 border-radius: 999px;
-        if requested and isinstance(requested, list) and isinstance(requested[0], Mapping):
-            first_request = cast(Mapping[str, object], requested[0])
-            filepath = first_request.get("filepath")
-            if isinstance(filepath, str) and filepath:
-                filename = filepath
-                height: 9px;
-                border-radius: 50%;
-                background: #0e6a77;
-                display: inline-block;
+                background: linear-gradient(180deg, #11a0b1 0%, #0d6e7a 100%);
+                box-shadow: 0 0 0 4px rgba(17, 160, 177, 0.12);
+            }
+            .meta-badge-label {
+                color: #5d7086;
+                font-size: 12px;
+                font-weight: 700;
+                letter-spacing: 0.04em;
+                white-space: nowrap;
+            }
+            .meta-badge-value {
+                min-width: 0;
+                color: #17314d;
+                font-size: 15px;
+                font-weight: 700;
+            }
+            .meta-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+                gap: 12px;
+            }
+            .meta-card {
+                min-width: 0;
+                padding: 14px 16px;
+                background: rgba(245, 250, 252, 0.92);
+                border: 1px solid #d5e4eb;
+                border-radius: 14px;
+            }
+            .meta-card-label {
+                margin-bottom: 6px;
+                color: #61758f;
+                font-size: 12px;
+                font-weight: 700;
+                letter-spacing: 0.04em;
+                text-transform: uppercase;
+            }
+            .meta-card-value {
+                color: #163049;
+                font-size: 14px;
+                font-weight: 700;
+                line-height: 1.45;
+                word-break: break-word;
+            }
+            .meta-card-value.mono {
+                font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+                font-size: 13px;
+            }
+            @media (max-width: 900px) {
+                .hero-title {
+                    font-size: 42px;
+                }
+                .hero-subtitle {
+                    font-size: 17px;
+                }
+                .meta-panel {
+                    padding: 16px;
+                }
+                .meta-badge {
+                    flex-basis: 100%;
+                }
+                .meta-grid {
+                    grid-template-columns: 1fr;
+                }
             }
             .step-box {
                 border-left: 4px solid #0a7b88;
@@ -996,13 +1077,39 @@ def render_meta_badges(
 ) -> None:
     st.markdown(
         (
-            "<div class='badge-row'>"
-            f"<div class='meta-badge'><span class='badge-dot'></span>版本 {version}</div>"
-            f"<div class='meta-badge'><span class='badge-dot'></span>最後更新 {updated_at}</div>"
-            f"<div class='meta-badge'><span class='badge-dot'></span>部署 {deploy_target}</div>"
-            f"<div class='meta-badge'><span class='badge-dot'></span>Runtime commit: {runtime_commit}</div>"
-            f"<div class='meta-badge'><span class='badge-dot'></span>Baseline commit: {min_commit}</div>"
-            f"<div class='meta-badge'><span class='badge-dot'></span>Deploy marker: {deploy_marker}</div>"
+            "<div class='meta-panel'>"
+            "<div class='meta-panel-caption'>Deployment Overview</div>"
+            "<div class='badge-row badge-row-primary'>"
+            "<div class='meta-badge'>"
+            "<span class='badge-dot'></span>"
+            "<span class='meta-badge-label'>版本</span>"
+            f"<span class='meta-badge-value'>{version}</span>"
+            "</div>"
+            "<div class='meta-badge'>"
+            "<span class='badge-dot'></span>"
+            "<span class='meta-badge-label'>最後更新</span>"
+            f"<span class='meta-badge-value'>{updated_at}</span>"
+            "</div>"
+            "<div class='meta-badge'>"
+            "<span class='badge-dot'></span>"
+            "<span class='meta-badge-label'>部署方式</span>"
+            f"<span class='meta-badge-value'>{deploy_target}</span>"
+            "</div>"
+            "</div>"
+            "<div class='meta-grid'>"
+            "<div class='meta-card'>"
+            "<div class='meta-card-label'>Runtime Commit</div>"
+            f"<div class='meta-card-value mono'>{runtime_commit}</div>"
+            "</div>"
+            "<div class='meta-card'>"
+            "<div class='meta-card-label'>Baseline Commit</div>"
+            f"<div class='meta-card-value mono'>{min_commit}</div>"
+            "</div>"
+            "<div class='meta-card'>"
+            "<div class='meta-card-label'>Deploy Marker</div>"
+            f"<div class='meta-card-value mono'>{deploy_marker}</div>"
+            "</div>"
+            "</div>"
             "</div>"
         ),
         unsafe_allow_html=True,
