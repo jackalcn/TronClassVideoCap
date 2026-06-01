@@ -84,10 +84,3 @@ jobs:
 
           raise SystemExit(last_error or "Streamlit deployment health check failed")
           PY
-        except SystemExit as exc:
-                  last_error = str(exc)
-                  print(f"retrying after probe failure: {last_error}")
-                  time.sleep(15)
-
-          raise SystemExit(last_error or "Streamlit deployment health check failed")
-          PY
