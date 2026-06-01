@@ -1,0 +1,117 @@
+name: Streamlit Deploy Health
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      APP_URL: https://tronclass-videocap.streamlit.app/
+      LEGACY_SHARE_URL: https://share.streamlit.io/jackalcn/TronClassVideoCap/main/main.py
+      EXPECTED_AUTH_HOST: share.streamlit.io
+      EXPECTED_AUTH_PATH: /-/auth/app
+      EXPECTED_DEPLOY_MARKER: build-2026-06-01-01-mac-fallback
+      EXPECTED_APP_VERSION: v2026.06.01.1
+      STREAMLIT_AUTH_COOKIE: ${{ secrets.STREAMLIT_AUTH_COOKIE }}
+
+    steps:
+      - name: Check canonical app URL and auth redirect
+        run: |
+          python - <<'PY'
+          import os
+          import sys
+          import time
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+
+          app_url = os.environ["APP_URL"]
+          legacy_share_url = os.environ["LEGACY_SHARE_URL"]
+          expected_auth_host = os.environ["EXPECTED_AUTH_HOST"]
+          expected_auth_path = os.environ["EXPECTED_AUTH_PATH"]
+          expected_marker = os.environ["EXPECTED_DEPLOY_MARKER"]
+          expected_version = os.environ["EXPECTED_APP_VERSION"]
+          auth_cookie = os.environ.get("STREAMLIT_AUTH_COOKIE", "").strip()
+
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, req, fp, code, msg, headers, newurl):
+                  return None
+
+          def request(url: str, allow_redirects: bool = False, headers: dict[str, str] | None = None):
+              opener = urllib.request.build_opener() if allow_redirects else urllib.request.build_opener(NoRedirect)
+              request_headers = {"User-Agent": "GitHubActions/StreamlitHealth"}
+              if headers:
+                  request_headers.update(headers)
+              req = urllib.request.Request(url, headers=request_headers)
+              try:
+                  with opener.open(req, timeout=20) as resp:
+                      body = resp.read().decode("utf-8", "ignore")
+                      return resp.status, resp.headers, body
+              except urllib.error.HTTPError as exc:
+                  body = exc.read().decode("utf-8", "ignore")
+                  return exc.code, exc.headers, body
+
+          def assert_auth_redirect(url: str) -> None:
+              status, headers, body = request(url, allow_redirects=False)
+              location = headers.get("Location", "")
+              print(f"probe url={url} status={status} location={location}")
+              if status not in {302, 303}:
+                  raise SystemExit(f"Expected auth redirect for {url}, got status={status} body={body[:200]!r}")
+              parsed = urllib.parse.urlparse(location)
+              if parsed.netloc != expected_auth_host or parsed.path != expected_auth_path:
+                  raise SystemExit(f"Unexpected auth redirect target for {url}: {location}")
+              redirect_uri = urllib.parse.parse_qs(parsed.query).get("redirect_uri", [""])[0]
+              expected_base = url.rstrip("/")
+              if not redirect_uri.startswith(expected_base):
+                  raise SystemExit(f"Redirect URI mismatch for {url}: {redirect_uri}")
+
+          def assert_legacy_entrypoint() -> None:
+              status, headers, body = request(legacy_share_url, allow_redirects=False)
+              location = headers.get("Location", "")
+              print(f"legacy status={status} location={location}")
+              if status in {302, 303}:
+                  if "tronclass-videocap.streamlit.app" not in location:
+                      raise SystemExit(f"Legacy share URL redirected somewhere unexpected: {location}")
+                  return
+              if status == 200:
+                  if "streamlit" not in body.lower():
+                      raise SystemExit("Legacy share URL returned 200 but did not look like a Streamlit page")
+                  return
+              raise SystemExit(f"Legacy share URL unexpected status: {status}")
+
+          def assert_authed_content() -> None:
+              headers = {"Cookie": auth_cookie}
+              status, resp_headers, body = request(app_url, allow_redirects=True, headers=headers)
+              print(f"authed status={status} final_url_hint={resp_headers.get('Content-Type', '')}")
+              combined = body
+              if status != 200:
+                  raise SystemExit(f"Authenticated request failed with status={status}")
+              if expected_marker not in combined and expected_version not in combined:
+                  raise SystemExit(
+                      "Authenticated request succeeded but did not expose expected deploy marker/version in HTML. "
+                      "If the app is fully client-rendered, use browser-based auth verification instead."
+                  )
+
+          deadline = time.time() + 600
+          last_error = None
+          while time.time() < deadline:
+              try:
+                  assert_legacy_entrypoint()
+                  assert_auth_redirect(app_url)
+                  assert_auth_redirect(urllib.parse.urljoin(app_url, "_stcore/health"))
+                  if auth_cookie:
+                      assert_authed_content()
+                  print("Streamlit deployment health check passed")
+                  sys.exit(0)
+              except SystemExit as exc:
+                  last_error = str(exc)
+                  print(f"retrying after probe failure: {last_error}")
+                  time.sleep(15)
+
+          raise SystemExit(last_error or "Streamlit deployment health check failed")
+          PY
