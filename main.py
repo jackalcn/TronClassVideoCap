@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 import os
 import re
+import shutil
 import sys
 import time
 import subprocess
@@ -9,14 +11,14 @@ import zipfile
 from io import BytesIO
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable, Optional, Protocol, TypedDict, cast
 from urllib.parse import urljoin
 
 import streamlit as st
 import streamlit.components.v1 as components
 import yt_dlp
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
-from playwright.sync_api import Page, sync_playwright
+from playwright.sync_api import Browser, Page, Playwright, sync_playwright
 
 
 USERNAME_SELECTORS = (
@@ -43,8 +45,10 @@ SUBMIT_SELECTORS = (
     'button:has-text("Sign in")',
 )
 
+APP_VERSION = "v2026.06.01.1"
+APP_UPDATED_AT = "2026-06-01"
 DEPLOY_VERIFY_MIN_COMMIT = "7f71b98"
-DEPLOY_MARKER = "build-2026-05-15-02"
+DEPLOY_MARKER = "build-2026-06-01-01-mac-fallback"
 
 SUBTITLE_EXTENSIONS = {
     ".srt",
@@ -58,7 +62,60 @@ SUBTITLE_EXTENSIONS = {
     ".xml",
 }
 
-_PLAYWRIGHT_CHROMIUM_READY = False
+SubtitleRow = dict[str, str]
+
+
+class SubtitleDebugReport(TypedDict):
+    title: str
+    extractor: str
+    manual_rows: list[SubtitleRow]
+    auto_rows: list[SubtitleRow]
+    inspection_error: str
+
+
+class StatusUI(Protocol):
+    def info(self, message: str) -> None: ...
+
+
+class ProgressUI(Protocol):
+    def progress(self, value: float, text: str = "") -> None: ...
+
+
+playwright_chromium_ready = False
+ffmpeg_status_cache: Optional[tuple[bool, str]] = None
+
+
+def get_ffmpeg_status() -> tuple[bool, str]:
+    global ffmpeg_status_cache
+    if ffmpeg_status_cache is not None:
+        return ffmpeg_status_cache
+
+    executable = shutil.which("ffmpeg")
+    if not executable:
+        ffmpeg_status_cache = (False, "PATH 中找不到 ffmpeg")
+        return ffmpeg_status_cache
+
+    try:
+        result = subprocess.run(
+            [executable, "-version"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=3,
+        )
+    except Exception as exc:
+        ffmpeg_status_cache = (False, f"ffmpeg 無法執行：{exc}")
+        return ffmpeg_status_cache
+
+    if result.returncode != 0:
+        stderr_text = (result.stderr or "").strip()
+        stdout_text = (result.stdout or "").strip()
+        details = stderr_text or stdout_text or "unknown error"
+        ffmpeg_status_cache = (False, f"ffmpeg 無法使用：{details}")
+        return ffmpeg_status_cache
+
+    ffmpeg_status_cache = (True, executable)
+    return ffmpeg_status_cache
 
 
 def fill_first(page: Page, selectors: Iterable[str], value: str) -> Optional[str]:
@@ -133,7 +190,7 @@ def find_vimeo_player_url(page: Page, timeout_ms: int = 25000) -> Optional[str]:
     return None
 
 
-def write_netscape_cookie_file(cookies: list[dict], target: Path) -> None:
+def write_netscape_cookie_file(cookies: Sequence[Mapping[str, object]], target: Path) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
 
     lines = [
@@ -142,31 +199,36 @@ def write_netscape_cookie_file(cookies: list[dict], target: Path) -> None:
     ]
 
     for cookie in cookies:
-        domain = cookie.get("domain", "")
-        if not domain:
+        domain_value = cookie.get("domain", "")
+        if not isinstance(domain_value, str) or not domain_value:
             continue
 
-        include_subdomains = "TRUE" if domain.startswith(".") else "FALSE"
-        path = cookie.get("path", "/")
+        include_subdomains = "TRUE" if domain_value.startswith(".") else "FALSE"
+        path_value = cookie.get("path", "/")
+        path = path_value if isinstance(path_value, str) and path_value else "/"
         secure = "TRUE" if cookie.get("secure") else "FALSE"
 
-        expires = cookie.get("expires", 0)
-        if isinstance(expires, float):
-            expires = int(expires)
-        if not expires or expires < 0:
+        expires_value = cookie.get("expires", 0)
+        if isinstance(expires_value, (int, float)):
+            expires = int(expires_value)
+        else:
+            expires = 0
+        if expires < 0:
             expires = 0
 
-        name = cookie.get("name", "")
-        value = cookie.get("value", "")
+        name_value = cookie.get("name", "")
+        name = name_value if isinstance(name_value, str) else ""
+        stored_value = cookie.get("value", "")
+        value = stored_value if isinstance(stored_value, str) else ""
 
-        line = f"{domain}\t{include_subdomains}\t{path}\t{secure}\t{expires}\t{name}\t{value}"
+        line = f"{domain_value}\t{include_subdomains}\t{path}\t{secure}\t{expires}\t{name}\t{value}"
         lines.append(line)
 
     target.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def flatten_subtitle_tracks(track_map: dict[str, Any] | None, source: str) -> list[dict[str, str]]:
-    rows: list[dict[str, str]] = []
+def flatten_subtitle_tracks(track_map: Mapping[str, object] | None, source: str) -> list[SubtitleRow]:
+    rows: list[SubtitleRow] = []
     if not isinstance(track_map, dict):
         return rows
 
@@ -174,28 +236,30 @@ def flatten_subtitle_tracks(track_map: dict[str, Any] | None, source: str) -> li
         tracks = track_map.get(lang)
         if not isinstance(tracks, list):
             continue
-        for track in tracks:
-            if not isinstance(track, dict):
+        track_items = cast(list[object], tracks)
+        for raw_track in track_items:
+            if not isinstance(raw_track, Mapping):
                 continue
+            track_data = cast(Mapping[str, object], raw_track)
             rows.append(
                 {
                     "來源": source,
                     "語言": str(lang),
-                    "格式": str(track.get("ext") or ""),
-                    "名稱": str(track.get("name") or ""),
-                    "協定": str(track.get("protocol") or ""),
-                    "有 URL": "yes" if track.get("url") else "no",
+                    "格式": str(track_data.get("ext") or ""),
+                    "名稱": str(track_data.get("name") or ""),
+                    "協定": str(track_data.get("protocol") or ""),
+                    "有 URL": "yes" if track_data.get("url") else "no",
                 }
             )
 
     return rows
 
 
-def collect_subtitle_languages(manual_rows: list[dict[str, str]], auto_rows: list[dict[str, str]]) -> list[str]:
+def collect_subtitle_languages(manual_rows: list[SubtitleRow], auto_rows: list[SubtitleRow]) -> list[str]:
     languages = {
         row.get("語言", "").strip()
         for row in [*manual_rows, *auto_rows]
-        if isinstance(row, dict) and row.get("語言", "").strip()
+        if row.get("語言", "").strip()
     }
     return sorted(languages)
 
@@ -229,8 +293,8 @@ def render_copy_languages_widget(languages: list[str]) -> None:
     )
 
 
-def inspect_subtitle_tracks(vimeo_url: str, cookie_file: Path, referer_url: str, retry_count: int) -> dict[str, Any]:
-    opts = {
+def inspect_subtitle_tracks(vimeo_url: str, cookie_file: Path, referer_url: str, retry_count: int) -> SubtitleDebugReport:
+    opts: dict[str, Any] = {
         "cookiefile": str(cookie_file),
         "skip_download": True,
         "quiet": True,
@@ -241,8 +305,8 @@ def inspect_subtitle_tracks(vimeo_url: str, cookie_file: Path, referer_url: str,
         },
     }
 
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(vimeo_url, download=False)
+    with yt_dlp.YoutubeDL(cast(Any, opts)) as ydl:
+        info = cast(dict[str, Any], ydl.extract_info(vimeo_url, download=False))
 
     manual_rows = flatten_subtitle_tracks(info.get("subtitles"), source="manual")
     auto_rows = flatten_subtitle_tracks(info.get("automatic_captions"), source="auto")
@@ -256,22 +320,22 @@ def inspect_subtitle_tracks(vimeo_url: str, cookie_file: Path, referer_url: str,
     }
 
 
-def render_subtitle_debug_report(debug_report: dict[str, Any]) -> None:
+def render_subtitle_debug_report(debug_report: SubtitleDebugReport) -> None:
     st.markdown("### 字幕除錯資訊")
 
-    inspection_error = str(debug_report.get("inspection_error") or "")
+    inspection_error = debug_report["inspection_error"]
     if inspection_error:
         st.error(f"無法取得字幕軌清單：{inspection_error}")
         st.warning("這通常代表權限不足、cookie 失效，或影片提供方封鎖了字幕清單。")
         return
 
-    title = str(debug_report.get("title") or "")
-    extractor = str(debug_report.get("extractor") or "")
+    title = debug_report["title"]
+    extractor = debug_report["extractor"]
     if title or extractor:
         st.caption(f"yt-dlp 解析來源: {extractor} | 標題: {title}")
 
-    manual_rows = debug_report.get("manual_rows") or []
-    auto_rows = debug_report.get("auto_rows") or []
+    manual_rows = debug_report["manual_rows"]
+    auto_rows = debug_report["auto_rows"]
 
     if manual_rows:
         st.write("手動字幕軌")
@@ -300,7 +364,7 @@ def resolve_vimeo_and_cookies(
     video_page_url: str,
     output_dir: Path,
     headless: bool,
-    status_ui,
+    status_ui: StatusUI,
 ) -> tuple[str, Path]:
     cookies_file = output_dir / "tronclass_cookies.txt"
 
@@ -353,25 +417,9 @@ def is_missing_playwright_executable_error(exc: Exception) -> bool:
     return any(marker in message for marker in markers)
 
 
-def is_missing_playwright_linux_dependency_error(exc: Exception) -> bool:
-    message = str(exc).lower()
-    return (
-        "error while loading shared libraries" in message
-        or ("cannot open shared object file" in message and ".so" in message)
-    )
-
-
-def extract_missing_shared_library(exc: Exception) -> str:
-    message = str(exc)
-    match = re.search(r"error while loading shared libraries:\s*([^:\s]+)", message, flags=re.IGNORECASE)
-    if match:
-        return match.group(1)
-    return ""
-
-
-def ensure_playwright_chromium_installed(status_ui) -> None:
-    global _PLAYWRIGHT_CHROMIUM_READY
-    if _PLAYWRIGHT_CHROMIUM_READY:
+def ensure_playwright_chromium_installed(status_ui: StatusUI) -> None:
+    global playwright_chromium_ready
+    if playwright_chromium_ready:
         return
 
     status_ui.info("0/4 偵測到 Playwright Chromium 缺失，正在安裝（首次可能需要 1-3 分鐘）")
@@ -389,11 +437,11 @@ def ensure_playwright_chromium_installed(status_ui) -> None:
         details = stderr_text or stdout_text or "unknown error"
         raise RuntimeError(f"Playwright Chromium 安裝失敗：{details}")
 
-    _PLAYWRIGHT_CHROMIUM_READY = True
+    playwright_chromium_ready = True
     status_ui.info("0/4 Playwright Chromium 安裝完成，繼續執行登入流程")
 
 
-def launch_chromium_with_bootstrap(playwright, headless: bool, status_ui):
+def launch_chromium_with_bootstrap(playwright: Playwright, headless: bool, status_ui: StatusUI) -> Browser:
     for attempt in range(2):
         try:
             return playwright.chromium.launch(headless=headless)
@@ -401,18 +449,6 @@ def launch_chromium_with_bootstrap(playwright, headless: bool, status_ui):
             if attempt == 0 and is_missing_playwright_executable_error(exc):
                 ensure_playwright_chromium_installed(status_ui)
                 continue
-            if is_missing_playwright_linux_dependency_error(exc):
-                missing_lib = extract_missing_shared_library(exc)
-                missing_text = f"（缺少 {missing_lib}）" if missing_lib else ""
-                raise RuntimeError(
-                    "Playwright Chromium 啟動失敗：Linux 系統缺少共享函式庫"
-                    f"{missing_text}。"
-                    "請在部署環境安裝必要套件後重新部署。"
-                    "若使用 Streamlit Cloud，先在 packages.txt 保留最小集合："
-                    "libnspr4, libnss3（另可保留 ffmpeg）。"
-                    "若仍缺少 .so，再依錯誤訊息逐一追加單一套件；"
-                    "避免一次加入大量 GUI 套件，以免觸發 apt 衝突（例如 libasound2 與 libasound2t64）。"
-                ) from exc
             raise
     raise RuntimeError("無法啟動 Playwright Chromium")
 
@@ -429,12 +465,13 @@ def download_with_ytdlp(
     embed_subtitles: bool,
     subtitle_debug_mode: bool,
     retry_count: int,
-    progress_ui,
-) -> tuple[Path, bool, bool, dict[str, Any]]:
+    progress_ui: ProgressUI,
+) -> tuple[Path, bool, bool, SubtitleDebugReport]:
     output_dir.mkdir(parents=True, exist_ok=True)
+    ffmpeg_available, _ = get_ffmpeg_status()
 
     result: dict[str, str] = {}
-    subtitle_debug_report: dict[str, Any] = {
+    subtitle_debug_report: SubtitleDebugReport = {
         "title": "",
         "extractor": "",
         "manual_rows": [],
@@ -442,7 +479,7 @@ def download_with_ytdlp(
         "inspection_error": "",
     }
 
-    def hook(data: dict) -> None:
+    def hook(data: dict[str, Any]) -> None:
         status = data.get("status")
         if status == "downloading":
             total = data.get("total_bytes") or data.get("total_bytes_estimate")
@@ -457,11 +494,10 @@ def download_with_ytdlp(
         elif status == "finished":
             progress_ui.progress(1.0, text="下載完成，正在封裝檔案...")
 
-    ydl_opts = {
+    ydl_opts: dict[str, Any] = {
         "outtmpl": str(output_dir / output_template),
         "cookiefile": str(cookie_file),
-        "format": "bestvideo+bestaudio/best",
-        "merge_output_format": "mp4",
+        "format": "bestvideo+bestaudio/best" if ffmpeg_available else "best",
         "noplaylist": True,
         "quiet": True,
         "no_warnings": True,
@@ -471,15 +507,17 @@ def download_with_ytdlp(
         },
         "progress_hooks": [hook],
     }
+    if ffmpeg_available:
+        ydl_opts["merge_output_format"] = "mp4"
 
     if download_subtitles:
         ydl_opts["writesubtitles"] = True
         ydl_opts["writeautomaticsub"] = True
         ydl_opts["subtitleslangs"] = subtitle_languages
         ydl_opts["subtitlesformat"] = subtitle_format
-        if subtitle_format in {"srt", "vtt"}:
+        if ffmpeg_available and subtitle_format in {"srt", "vtt"}:
             ydl_opts["convertsubtitles"] = subtitle_format
-        if embed_subtitles:
+        if ffmpeg_available and embed_subtitles:
             ydl_opts["embedsubtitles"] = True
 
     if subtitle_debug_mode:
@@ -493,17 +531,20 @@ def download_with_ytdlp(
         except Exception as exc:
             subtitle_debug_report["inspection_error"] = str(exc)
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(vimeo_url, download=True)
-        filename = ydl.prepare_filename(info)
+    with yt_dlp.YoutubeDL(cast(Any, ydl_opts)) as ydl:
+        info = cast(dict[str, Any], ydl.extract_info(vimeo_url, download=True))
+        filename = str(ydl.prepare_filename(cast(Any, info)))
         has_available_subs = bool(info.get("subtitles") or info.get("automatic_captions"))
         has_requested_subs = bool(info.get("requested_subtitles"))
 
         requested = info.get("requested_downloads")
         if requested and isinstance(requested, list):
-            filepath = requested[0].get("filepath")
-            if filepath:
-                filename = filepath
+            requested_items = cast(list[object], requested)
+            if requested_items and isinstance(requested_items[0], Mapping):
+                first_request = cast(Mapping[str, object], requested_items[0])
+                filepath = first_request.get("filepath")
+                if isinstance(filepath, str) and filepath:
+                    filename = filepath
 
         result["path"] = filename
 
@@ -524,9 +565,9 @@ def run_download(
     embed_subtitles: bool,
     subtitle_debug_mode: bool,
     retry_count: int,
-    status_ui,
-    progress_ui,
-) -> tuple[Path, bool, bool, dict[str, Any]]:
+    status_ui: StatusUI,
+    progress_ui: ProgressUI,
+) -> tuple[Path, bool, bool, SubtitleDebugReport]:
     vimeo_url, cookies_file = resolve_vimeo_and_cookies(
         login_url=login_url,
         username=username,
@@ -562,8 +603,8 @@ def run_subtitle_inspection(
     output_dir: Path,
     headless: bool,
     retry_count: int,
-    status_ui,
-) -> tuple[str, dict[str, Any]]:
+    status_ui: StatusUI,
+) -> tuple[str, SubtitleDebugReport]:
     vimeo_url, cookies_file = resolve_vimeo_and_cookies(
         login_url=login_url,
         username=username,
@@ -713,7 +754,7 @@ def select_output_directory(initial_dir: str) -> tuple[Optional[str], Optional[s
     try:
         root = tk.Tk()
         root.withdraw()
-        root.attributes("-topmost", True)
+        cast(Any, root).attributes("-topmost", True)
         selected = filedialog.askdirectory(initialdir=initial_dir or str(Path.cwd()))
         root.destroy()
     except Exception as exc:
@@ -812,17 +853,16 @@ def apply_custom_style() -> None:
             .meta-badge {
                 display: inline-flex;
                 align-items: center;
-                gap: 8px;
+        filename = str(ydl.prepare_filename(cast(Any, info)))
                 padding: 8px 12px;
                 background: #ffffff;
                 border: 1px solid #d8e6ef;
                 border-radius: 999px;
-                color: #35506a;
-                font-size: 13px;
-                box-shadow: 0 6px 16px rgba(18, 36, 64, 0.06);
-            }
-            .badge-dot {
-                width: 9px;
+        if requested and isinstance(requested, list) and isinstance(requested[0], Mapping):
+            first_request = cast(Mapping[str, object], requested[0])
+            filepath = first_request.get("filepath")
+            if isinstance(filepath, str) and filepath:
+                filename = filepath
                 height: 9px;
                 border-radius: 50%;
                 background: #0e6a77;
@@ -1068,6 +1108,7 @@ def main() -> None:
     st.session_state.setdefault("health_message", "尚未執行健康檢查")
     st.session_state.setdefault("last_output_file", "")
     is_cloud = is_streamlit_cloud_environment()
+    ffmpeg_available, ffmpeg_status = get_ffmpeg_status()
 
     with st.sidebar:
         st.markdown("## 任務設定")
@@ -1117,6 +1158,21 @@ def main() -> None:
         subtitle_languages_raw = st.text_input("字幕語言代碼", value="all")
         subtitle_format = st.selectbox("字幕格式", options=["srt", "vtt", "best"], index=0)
         embed_subtitles = st.checkbox("嵌入字幕到 mp4", value=True)
+        if not is_cloud and sys.platform == "darwin":
+            if ffmpeg_available:
+                st.info("macOS 已偵測到 ffmpeg，會使用最佳畫質流程；若勾選字幕嵌入，會直接封裝進 mp4。")
+            else:
+                st.info("macOS 目前會走相容模式：仍可下載影片與外掛字幕檔，但不會做高畫質合併或字幕嵌入。")
+        if not is_cloud and not ffmpeg_available:
+            if sys.platform == "darwin":
+                st.warning(
+                    "未偵測到 ffmpeg。macOS 本機仍可下載，但會改用相容模式，只抓單一影片檔並略過字幕嵌入。若要最佳畫質或嵌入字幕，請先執行 brew install ffmpeg。下載完成後仍可用下方按鈕把影片與字幕存到本機。"
+                )
+            else:
+                st.warning(
+                    "未偵測到 ffmpeg。本機仍可下載，但會改用相容模式，只抓單一影片檔並略過字幕嵌入。若要最佳畫質或嵌入字幕，請先安裝 ffmpeg。"
+                )
+            st.caption(f"ffmpeg 狀態：{ffmpeg_status}")
         subtitle_debug_mode = st.checkbox("除錯模式：顯示字幕軌", value=False)
 
         start_download = st.button("開始下載", type="primary", use_container_width=True)
@@ -1137,7 +1193,7 @@ def main() -> None:
         st.session_state["health_message"] = "尚未執行健康檢查"
         st.session_state["last_output_file"] = ""
         for key in list(st.session_state.keys()):
-            if key.startswith("show_separate_downloads_"):
+            if isinstance(key, str) and key.startswith("show_separate_downloads_"):
                 st.session_state.pop(key, None)
         st.success("任務歷程已清除。")
 
@@ -1145,8 +1201,8 @@ def main() -> None:
     st.markdown("<div class='hero-subtitle'>課程頁面內嵌 Vimeo 影片與字幕一站式下載</div>", unsafe_allow_html=True)
     runtime_commit = detect_runtime_commit_short()
     render_meta_badges(
-        version="v2026.05.15.2",
-        updated_at="2026-05-15 01:10 (UTC+8)",
+        version=APP_VERSION,
+        updated_at=APP_UPDATED_AT,
         deploy_target="main 分支自動部署",
         runtime_commit=runtime_commit,
         min_commit=DEPLOY_VERIFY_MIN_COMMIT,
@@ -1187,7 +1243,7 @@ def main() -> None:
             st.caption("尚無任務紀錄。")
 
     class StatusBridge:
-        def __init__(self, placeholder, stage_ui):
+        def __init__(self, placeholder: Any, stage_ui: Any) -> None:
             self.placeholder = placeholder
             self.stage_ui = stage_ui
 
@@ -1208,7 +1264,7 @@ def main() -> None:
             )
 
     class DownloadProgressBridge:
-        def __init__(self, progress_ui):
+        def __init__(self, progress_ui: Any) -> None:
             self.progress_ui = progress_ui
 
         def progress(self, value: float, text: str = "") -> None:

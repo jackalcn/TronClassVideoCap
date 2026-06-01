@@ -1,0 +1,105 @@
+name: macOS Smoke
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: macos-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Compile main.py
+        run: python -m py_compile main.py
+
+      - name: macOS fallback smoke test
+        run: |
+          python - <<'PY'
+          import sys
+          from pathlib import Path
+          import main
+
+          assert sys.platform == "darwin", sys.platform
+
+          captured = {}
+
+          class DummyProgress:
+              def progress(self, value, text=""):
+                  pass
+
+          class DummyYDL:
+              def __init__(self, opts):
+                  captured.update(opts)
+
+              def __enter__(self):
+                  return self
+
+              def __exit__(self, exc_type, exc, tb):
+                  return False
+
+              def extract_info(self, url, download=True):
+                  dummy_path = str((Path("downloads") / "dummy.mp4").resolve())
+                  return {
+                      "subtitles": {},
+                      "automatic_captions": {},
+                      "requested_subtitles": {},
+                      "requested_downloads": [{"filepath": dummy_path}],
+                  }
+
+              def prepare_filename(self, info):
+                  return str((Path("downloads") / "dummy.mp4").resolve())
+
+          orig_status = main.get_ffmpeg_status
+          orig_ydl = main.yt_dlp.YoutubeDL
+
+          try:
+              main.get_ffmpeg_status = lambda: (False, "mock missing")
+              main.yt_dlp.YoutubeDL = DummyYDL
+
+              dummy_output = Path("downloads") / "dummy.mp4"
+              dummy_output.parent.mkdir(parents=True, exist_ok=True)
+              dummy_output.write_bytes(b"0")
+              cookie_file = Path("downloads") / "dummy_cookies.txt"
+              cookie_file.write_text("cookie", encoding="utf-8")
+
+              output_path, _, _, _ = main.download_with_ytdlp(
+                  vimeo_url="https://player.vimeo.com/video/1",
+                  output_dir=Path("downloads"),
+                  output_template="%(title)s.%(ext)s",
+                  cookie_file=cookie_file,
+                  referer_url="https://example.com",
+                  download_subtitles=True,
+                  subtitle_languages=["all"],
+                  subtitle_format="srt",
+                  embed_subtitles=True,
+                  subtitle_debug_mode=False,
+                  retry_count=1,
+                  progress_ui=DummyProgress(),
+              )
+
+              assert output_path.name == "dummy.mp4", output_path
+              assert captured.get("format") == "best", captured
+              assert "merge_output_format" not in captured, captured
+              assert "embedsubtitles" not in captured, captured
+              assert "convertsubtitles" not in captured, captured
+              print("macOS fallback smoke passed")
+          finally:
+              main.get_ffmpeg_status = orig_status
+              main.yt_dlp.YoutubeDL = orig_ydl
+          PY

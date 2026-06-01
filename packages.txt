@@ -1,3 +1,1 @@
 ffmpeg
-libnspr4
-libnss3
