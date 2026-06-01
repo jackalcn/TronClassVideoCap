@@ -103,3 +103,54 @@ jobs:
               main.get_ffmpeg_status = orig_status
               main.yt_dlp.YoutubeDL = orig_ydl
           PY
+
+      - name: macOS public Vimeo download smoke
+        run: |
+          python - <<'PY'
+          import shutil
+          import sys
+          import tempfile
+          from pathlib import Path
+
+          import main
+
+          assert sys.platform == "darwin", sys.platform
+
+          class DummyProgress:
+              def progress(self, value, text=""):
+                  pass
+
+          workdir = Path(tempfile.mkdtemp(prefix="videocap-macos-public-"))
+          output_dir = workdir / "downloads"
+          output_dir.mkdir(parents=True, exist_ok=True)
+          cookie_file = workdir / "cookies.txt"
+          main.write_netscape_cookie_file([], cookie_file)
+
+          orig_status = main.get_ffmpeg_status
+
+          try:
+              main.get_ffmpeg_status = lambda: (False, "mock missing")
+              output_path, has_available_subs, _, _ = main.download_with_ytdlp(
+                  vimeo_url="https://player.vimeo.com/video/76979871",
+                  output_dir=output_dir,
+                  output_template="%(title)s.%(ext)s",
+                  cookie_file=cookie_file,
+                  referer_url="https://vimeo.com/76979871",
+                  download_subtitles=False,
+                  subtitle_languages=["all"],
+                  subtitle_format="srt",
+                  embed_subtitles=False,
+                  subtitle_debug_mode=False,
+                  retry_count=1,
+                  progress_ui=DummyProgress(),
+              )
+
+              assert output_path.exists(), output_path
+              assert output_path.suffix.lower() == ".mp4", output_path
+              assert output_path.stat().st_size > 1_000_000, output_path.stat().st_size
+              assert has_available_subs is True
+              print(f"macOS public Vimeo download passed: {output_path.name} ({output_path.stat().st_size} bytes)")
+          finally:
+              main.get_ffmpeg_status = orig_status
+              shutil.rmtree(workdir, ignore_errors=True)
+          PY
